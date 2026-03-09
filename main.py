@@ -304,12 +304,133 @@ async def run_full_bot(configs: dict, mode: str):
                     m.VENUE_SCORE.labels(venue=venue_name).set(
                         vs.get("score", 0)
                     )
+                    # Score components
+                    for comp in ["avg_funding_rate", "funding_consistency",
+                                 "liquidity_depth", "trading_fees",
+                                 "funding_cycle", "contract_maturity", "uptime"]:
+                        val = vs.get(comp, vs.get(f"{comp}_score", 0))
+                        if val:
+                            m.VENUE_SCORE_COMPONENT.labels(
+                                venue=venue_name, component=comp
+                            ).set(val)
 
-            # Update funding rate metrics
-            matrix = collector.get_rate_matrix()
-            for symbol, venues in matrix.items():
-                for venue, rate in venues.items():
-                    m.FUNDING_RATE.labels(venue=venue, symbol=symbol).set(rate)
+            # Update funding rate metrics (raw + annualized + predicted)
+            for (venue, symbol), rate in collector.latest_rates.items():
+                ann = rate.annualized
+                m.FUNDING_RATE.labels(venue=venue, symbol=symbol).set(ann)
+                m.FUNDING_RATE_RAW.labels(venue=venue, symbol=symbol).set(rate.rate)
+                if rate.predicted_rate is not None:
+                    predicted_ann = rate.predicted_rate * (8760 / rate.cycle_hours)
+                    m.FUNDING_RATE_PREDICTED.labels(venue=venue, symbol=symbol).set(predicted_ann)
+                # Market data from funding rate objects
+                if rate.mark_price:
+                    m.MARK_PRICE.labels(venue=venue, symbol=symbol).set(rate.mark_price)
+                if rate.index_price:
+                    m.INDEX_PRICE.labels(venue=venue, symbol=symbol).set(rate.index_price)
+
+            # Funding rate 24h statistics
+            for venue_name in connected:
+                for symbol in symbols:
+                    stats = collector.get_historical_stats(venue_name, symbol, hours=24)
+                    if stats["count"] > 0:
+                        m.FUNDING_RATE_MEAN_24H.labels(venue=venue_name, symbol=symbol).set(
+                            stats["mean"] * (8760 / venue_configs.get(venue_name, venue_configs.get(list(venue_configs.keys())[0])).funding_cycle_hours)
+                        )
+                        m.FUNDING_RATE_STD_24H.labels(venue=venue_name, symbol=symbol).set(stats["std"])
+                        m.FUNDING_RATE_FLIPS_24H.labels(venue=venue_name, symbol=symbol).set(stats["flip_count"])
+
+            # Per-venue balances and orderbook data
+            for venue_name, adapter in connected.items():
+                try:
+                    t0 = time.monotonic()
+                    balance = await adapter.get_balance()
+                    m.VENUE_API_LATENCY.labels(venue=venue_name, endpoint="get_balance").observe(
+                        time.monotonic() - t0
+                    )
+                    available = balance.get("available", 0)
+                    total = balance.get("total", balance.get("equity", 0))
+                    margin_used = balance.get("margin", balance.get("margin_used", 0))
+                    m.VENUE_BALANCE_AVAILABLE.labels(venue=venue_name).set(available)
+                    m.VENUE_BALANCE_TOTAL.labels(venue=venue_name).set(total)
+                    m.VENUE_MARGIN_USED.labels(venue=venue_name).set(margin_used)
+                    if total > 0:
+                        m.VENUE_MARGIN_RATIO.labels(venue=venue_name).set(available / total)
+                except Exception as e:
+                    logger.debug("metrics.balance_error", venue=venue_name, error=str(e))
+
+                # Orderbook data for top 3 symbols
+                for symbol in symbols[:3]:
+                    try:
+                        norm_sym = adapter.normalize_symbol(symbol)
+                        t0 = time.monotonic()
+                        ob = await adapter.get_orderbook(norm_sym, depth=10)
+                        m.VENUE_API_LATENCY.labels(venue=venue_name, endpoint="get_orderbook").observe(
+                            time.monotonic() - t0
+                        )
+                        m.ORDERBOOK_SPREAD_BPS.labels(venue=venue_name, symbol=symbol).set(ob.spread_bps)
+                        depth = ob.depth_at_pct(1.0)
+                        m.ORDERBOOK_BID_DEPTH_USD.labels(venue=venue_name, symbol=symbol).set(depth["bid_depth"])
+                        m.ORDERBOOK_ASK_DEPTH_USD.labels(venue=venue_name, symbol=symbol).set(depth["ask_depth"])
+                        if ob.asks:
+                            oi_rate = collector.latest_rates.get((venue_name, symbol))
+                            if oi_rate and hasattr(oi_rate, 'mark_price') and oi_rate.mark_price:
+                                pass  # OI set above from funding rate
+                    except Exception:
+                        pass
+
+            # Per-venue position counts and exposure
+            venue_notional = {}
+            venue_pos_count = {}
+            venue_funding = {}
+            for hedge in self.portfolio.positions:
+                for leg, venue_attr in [(hedge.short_leg, "short_leg"), (hedge.long_leg, "long_leg")]:
+                    v = leg.venue
+                    venue_notional[v] = venue_notional.get(v, 0) + leg.size_usd
+                    venue_pos_count[v] = venue_pos_count.get(v, 0) + 1
+                    venue_funding[v] = venue_funding.get(v, 0) + leg.funding_accrued
+
+                # Per-position detailed metrics
+                m.POSITION_FUNDING_ACCRUED.labels(
+                    hedge_id=hedge.id, symbol=hedge.symbol,
+                    short_venue=hedge.short_leg.venue, long_venue=hedge.long_leg.venue,
+                ).set(hedge.total_funding_accrued)
+                m.POSITION_SIZE.labels(
+                    hedge_id=hedge.id, symbol=hedge.symbol,
+                    short_venue=hedge.short_leg.venue, long_venue=hedge.long_leg.venue,
+                ).set(hedge.net_size_usd)
+                m.POSITION_PNL.labels(
+                    hedge_id=hedge.id, symbol=hedge.symbol,
+                ).set(hedge.net_unrealized_pnl)
+
+                for side_label, leg in [("short", hedge.short_leg), ("long", hedge.long_leg)]:
+                    m.POSITION_LEVERAGE.labels(
+                        hedge_id=hedge.id, symbol=hedge.symbol,
+                        venue=leg.venue, side=side_label,
+                    ).set(leg.leverage)
+                    m.POSITION_LIQUIDATION_PRICE.labels(
+                        hedge_id=hedge.id, symbol=hedge.symbol,
+                        venue=leg.venue, side=side_label,
+                    ).set(leg.liquidation_price)
+                    m.POSITION_UNREALIZED_PNL.labels(
+                        hedge_id=hedge.id, symbol=hedge.symbol,
+                        venue=leg.venue, side=side_label,
+                    ).set(leg.unrealized_pnl)
+                    m.POSITION_ENTRY_PRICE.labels(
+                        hedge_id=hedge.id, symbol=hedge.symbol,
+                        venue=leg.venue, side=side_label,
+                    ).set(leg.entry_price)
+                    m.POSITION_MARK_PRICE.labels(
+                        hedge_id=hedge.id, symbol=hedge.symbol,
+                        venue=leg.venue, side=side_label,
+                    ).set(leg.mark_price)
+
+            nav = self.portfolio.total_nav or 1
+            for v in connected:
+                notional = venue_notional.get(v, 0)
+                m.VENUE_NOTIONAL_USD.labels(venue=v).set(notional)
+                m.VENUE_POSITION_COUNT.labels(venue=v).set(venue_pos_count.get(v, 0))
+                m.VENUE_EXPOSURE_PCT.labels(venue=v).set((notional / nav) * 100 if nav > 0 else 0)
+                m.VENUE_FUNDING_COLLECTED.labels(venue=v).set(venue_funding.get(v, 0))
 
             # 2. Find opportunities
             opps = collector.latest_opportunities
@@ -365,9 +486,9 @@ async def run_full_bot(configs: dict, mode: str):
             # Update portfolio metrics
             m.PORTFOLIO_NAV.set(self.portfolio.total_nav)
             m.PORTFOLIO_PNL.set(getattr(self.portfolio, "total_pnl", 0))
-            m.ACTIVE_POSITIONS.set(
-                len(getattr(self.portfolio, "positions", []))
-            )
+            m.PORTFOLIO_FUNDING_COLLECTED.set(self.portfolio.total_funding_collected)
+            m.ACTIVE_POSITIONS.set(len(self.portfolio.positions))
+            m.RISK_DRAWDOWN_PCT.set(self.portfolio.drawdown_pct)
             m.CYCLE_COUNT.inc()
             m.CYCLE_DURATION.observe(time.monotonic() - cycle_start)
 

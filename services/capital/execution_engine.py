@@ -12,12 +12,14 @@ Key DeFi challenges:
 from __future__ import annotations
 
 import asyncio
+import time
 import structlog
 
 from models.core import (
     TradeAction, ActionType, HedgePosition, Position,
     OrderResult, OrderStatus, Side,
 )
+from services.monitoring import metrics as m
 
 logger = structlog.get_logger()
 
@@ -102,6 +104,7 @@ class ExecutionEngine:
                      symbol=symbol, qty=qty, short=short_venue, long=long_venue)
 
         # Execute both legs simultaneously
+        order_start = time.monotonic()
         short_task = short_adapter.place_limit_order(
             short_symbol, Side.SHORT, qty, short_price, tif="IOC")
         long_task = long_adapter.place_limit_order(
@@ -109,6 +112,7 @@ class ExecutionEngine:
 
         results = await asyncio.gather(short_task, long_task, return_exceptions=True)
         short_result, long_result = results
+        fill_elapsed = time.monotonic() - order_start
 
         short_failed = isinstance(short_result, Exception)
         long_failed = isinstance(long_result, Exception)
@@ -117,11 +121,16 @@ class ExecutionEngine:
         if short_failed and long_failed:
             logger.error("execution.both_legs_failed",
                          short_err=str(short_result), long_err=str(long_result))
+            m.ORDER_ERRORS_TOTAL.labels(venue=short_venue, error_type="exception").inc()
+            m.ORDER_ERRORS_TOTAL.labels(venue=long_venue, error_type="exception").inc()
             return {"status": "FAILED", "reason": "Both legs failed"}
 
         # Partial fill — rollback
         if short_failed or long_failed:
             logger.warning("execution.partial_fill_rollback")
+            failed_venue = short_venue if short_failed else long_venue
+            m.ORDER_ERRORS_TOTAL.labels(venue=failed_venue, error_type="partial_fill").inc()
+            m.ROLLBACKS_TOTAL.labels(venue=failed_venue).inc()
             await self._rollback(
                 short_result if not short_failed else None,
                 long_result if not long_failed else None,
@@ -133,8 +142,22 @@ class ExecutionEngine:
         short_fill: OrderResult = short_result
         long_fill: OrderResult = long_result
 
+        # Track order fills
+        m.ORDER_FILLS_TOTAL.labels(
+            venue=short_venue, symbol=symbol, side="short", status=short_fill.status.value
+        ).inc()
+        m.ORDER_FILLS_TOTAL.labels(
+            venue=long_venue, symbol=symbol, side="long", status=long_fill.status.value
+        ).inc()
+        m.ORDER_FILL_TIME.labels(venue=short_venue).observe(fill_elapsed)
+        m.ORDER_FILL_TIME.labels(venue=long_venue).observe(fill_elapsed)
+
         if short_fill.status == OrderStatus.FAILED or long_fill.status == OrderStatus.FAILED:
             logger.warning("execution.order_rejected")
+            if short_fill.status == OrderStatus.FAILED:
+                m.ORDER_ERRORS_TOTAL.labels(venue=short_venue, error_type="rejected").inc()
+            if long_fill.status == OrderStatus.FAILED:
+                m.ORDER_ERRORS_TOTAL.labels(venue=long_venue, error_type="rejected").inc()
             await self._rollback(short_fill, long_fill,
                                  short_adapter, long_adapter,
                                  short_symbol, long_symbol)
@@ -151,6 +174,14 @@ class ExecutionEngine:
                     short_symbol, long_symbol,
                     short_fill, long_fill,
                 )
+
+        # Slippage tracking
+        if short_fill.avg_price and short_price:
+            slippage_short = abs(short_fill.avg_price - short_price) / short_price * 10000
+            m.ORDER_SLIPPAGE_BPS.labels(venue=short_venue).observe(slippage_short)
+        if long_fill.avg_price and long_price:
+            slippage_long = abs(long_fill.avg_price - long_price) / long_price * 10000
+            m.ORDER_SLIPPAGE_BPS.labels(venue=long_venue).observe(slippage_long)
 
         # Gas costs
         short_gas = short_adapter.estimate_gas_cost("trade")
@@ -182,6 +213,17 @@ class ExecutionEngine:
         )
 
         self.active_positions[hedge.id] = hedge
+
+        # Track per-venue fees and gas
+        m.TRADES_TOTAL.labels(action="OPEN", venue=short_venue).inc()
+        m.TRADES_TOTAL.labels(action="OPEN", venue=long_venue).inc()
+        m.VENUE_FEES_PAID_USD.labels(venue=short_venue).inc(short_fill.fee)
+        m.VENUE_FEES_PAID_USD.labels(venue=long_venue).inc(long_fill.fee)
+        m.VENUE_GAS_PAID_USD.labels(venue=short_venue).inc(short_gas)
+        m.VENUE_GAS_PAID_USD.labels(venue=long_venue).inc(long_gas)
+        m.FEES_PAID_USD.inc(hedge.total_fees)
+        m.GAS_PAID_USD.inc(hedge.total_gas)
+
         logger.info("execution.hedge_opened",
                      id=hedge.id,
                      basis=hedge.entry_basis,
@@ -240,6 +282,18 @@ class ExecutionEngine:
 
         net_pnl = (hedge.short_leg.unrealized_pnl + hedge.long_leg.unrealized_pnl
                     + hedge.total_funding_accrued - hedge.total_fees - hedge.total_gas)
+
+        # Track per-venue exit metrics
+        m.TRADES_TOTAL.labels(action="CLOSE", venue=short_venue).inc()
+        m.TRADES_TOTAL.labels(action="CLOSE", venue=long_venue).inc()
+        m.VENUE_FEES_PAID_USD.labels(venue=short_venue).inc(exit_fees / 2)
+        m.VENUE_FEES_PAID_USD.labels(venue=long_venue).inc(exit_fees / 2)
+        m.VENUE_GAS_PAID_USD.labels(venue=short_venue).inc(
+            short_adapter.estimate_gas_cost("trade"))
+        m.VENUE_GAS_PAID_USD.labels(venue=long_venue).inc(
+            long_adapter.estimate_gas_cost("trade"))
+        m.FEES_PAID_USD.inc(exit_fees)
+        m.GAS_PAID_USD.inc(exit_gas)
 
         del self.active_positions[position_id]
         logger.info("execution.hedge_closed", id=position_id, net_pnl=net_pnl)

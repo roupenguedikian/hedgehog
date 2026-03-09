@@ -7,6 +7,8 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
+import asyncio
+
 import httpx
 import structlog
 
@@ -32,6 +34,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
     def __init__(self, config: VenueConfig):
         super().__init__(config)
         self._client: Optional[httpx.AsyncClient] = None
+        self._exchange = None  # Hyperliquid SDK Exchange, cached after connect()
         self._address: str = ""
         self._private_key: str = ""
         self._meta_cache: Optional[dict] = None
@@ -46,6 +49,13 @@ class HyperliquidAdapter(BaseDefiAdapter):
                 acct = Account.from_key(private_key)
                 self._address = acct.address
                 self._private_key = private_key
+
+                from hyperliquid.exchange import Exchange
+                from hyperliquid.utils import constants
+                self._exchange = Exchange(
+                    wallet=self._private_key,
+                    base_url=constants.MAINNET_API_URL,
+                )
 
             # Fetch and cache metadata (asset universe) — public endpoint
             resp = await self._client.post("/info", json={"type": "metaAndAssetCtxs"})
@@ -64,10 +74,17 @@ class HyperliquidAdapter(BaseDefiAdapter):
             logger.error("hyperliquid.connect_failed", error=str(e))
             return False
 
-    async def _post_info(self, payload: dict) -> dict:
-        resp = await self._client.post("/info", json=payload)
-        resp.raise_for_status()
-        return resp.json()
+    async def _post_info(self, payload: dict, retries: int = 3) -> dict:
+        for attempt in range(retries):
+            resp = await self._client.post("/info", json=payload)
+            if resp.status_code in (429, 502, 503, 504) and attempt < retries - 1:
+                wait = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s
+                logger.warning("hyperliquid.transient_error",
+                               status=resp.status_code, attempt=attempt + 1, retry_in=wait)
+                await asyncio.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return resp.json()
 
     # ── Market Data ──────────────────────────────────────────────────────
 
@@ -134,17 +151,13 @@ class HyperliquidAdapter(BaseDefiAdapter):
     ) -> OrderResult:
         """Place limit order via Hyperliquid SDK."""
         try:
-            from hyperliquid.exchange import Exchange
-            from hyperliquid.utils import constants
+            if not self._exchange:
+                raise RuntimeError("Exchange not initialized — connect() with a private key first")
 
-            exchange = Exchange(
-                wallet=self._private_key,
-                base_url=constants.MAINNET_API_URL,
-            )
             is_buy = side == Side.LONG
             tif_map = {"GTC": "Gtc", "IOC": "Ioc", "ALO": "Alo"}
 
-            result = exchange.order(
+            result = self._exchange.order(
                 symbol, is_buy, size, price,
                 {"limit": {"tif": tif_map.get(tif, "Gtc")}},
                 reduce_only=reduce_only,
@@ -188,10 +201,9 @@ class HyperliquidAdapter(BaseDefiAdapter):
 
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
         try:
-            from hyperliquid.exchange import Exchange
-            from hyperliquid.utils import constants
-            exchange = Exchange(wallet=self._private_key, base_url=constants.MAINNET_API_URL)
-            result = exchange.cancel(symbol, int(order_id))
+            if not self._exchange:
+                raise RuntimeError("Exchange not initialized — connect() with a private key first")
+            result = self._exchange.cancel(symbol, int(order_id))
             return result.get("status") == "ok"
         except Exception as e:
             logger.error("hyperliquid.cancel_failed", error=str(e))
@@ -199,16 +211,14 @@ class HyperliquidAdapter(BaseDefiAdapter):
 
     async def cancel_all_orders(self, symbol: Optional[str] = None) -> int:
         try:
-            from hyperliquid.exchange import Exchange
-            from hyperliquid.utils import constants
-            exchange = Exchange(wallet=self._private_key, base_url=constants.MAINNET_API_URL)
-            # Get open orders first
+            if not self._exchange:
+                raise RuntimeError("Exchange not initialized — connect() with a private key first")
             open_orders = await self._post_info({"type": "openOrders", "user": self._address})
             count = 0
             for order in open_orders:
                 if symbol and order.get("coin") != symbol:
                     continue
-                exchange.cancel(order["coin"], order["oid"])
+                self._exchange.cancel(order["coin"], order["oid"])
                 count += 1
             return count
         except Exception as e:
@@ -230,7 +240,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
                 symbol=p["coin"],
                 side=Side.LONG if szi > 0 else Side.SHORT,
                 size=abs(szi),
-                size_usd=abs(szi) * float(p.get("positionValue", 0)) if p.get("positionValue") else 0,
+                size_usd=float(p.get("positionValue", 0)),
                 entry_price=float(p["entryPx"]),
                 mark_price=float(p.get("markPx", 0)),
                 unrealized_pnl=float(p["unrealizedPnl"]),

@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   bot:
     build: .
@@ -14,6 +12,8 @@ services:
     depends_on:
       - redis
       - timescaledb
+    networks:
+      - hedgehog
     command: python main.py --mode OBSERVE_ONLY
 
   redis:
@@ -23,6 +23,8 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - hedgehog
 
   timescaledb:
     image: timescale/timescaledb:latest-pg16
@@ -35,6 +37,8 @@ services:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
+    networks:
+      - hedgehog
 
   grafana:
     image: grafana/grafana:latest
@@ -50,6 +54,8 @@ services:
       - ./config/grafana/dashboards:/var/lib/grafana/dashboards
     depends_on:
       - prometheus
+    networks:
+      - hedgehog
 
   prometheus:
     image: prom/prometheus:latest
@@ -59,6 +65,14 @@ services:
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
+    depends_on:
+      - bot
+    networks:
+      - hedgehog
+
+networks:
+  hedgehog:
+    driver: bridge
 
 volumes:
   redis_data:

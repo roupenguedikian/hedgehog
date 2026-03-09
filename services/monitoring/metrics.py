@@ -41,12 +41,52 @@ POSITION_PNL = Gauge(
     "Position net P&L in USD",
     ["hedge_id", "symbol"],
 )
+POSITION_FUNDING_ACCRUED = Gauge(
+    "hedgehog_position_funding_accrued_usd",
+    "Funding accrued for a hedge position",
+    ["hedge_id", "symbol", "short_venue", "long_venue"],
+)
+POSITION_LEVERAGE = Gauge(
+    "hedgehog_position_leverage",
+    "Effective leverage per position leg",
+    ["hedge_id", "symbol", "venue", "side"],
+)
+POSITION_LIQUIDATION_PRICE = Gauge(
+    "hedgehog_position_liquidation_price",
+    "Liquidation price per position leg",
+    ["hedge_id", "symbol", "venue", "side"],
+)
+POSITION_UNREALIZED_PNL = Gauge(
+    "hedgehog_position_unrealized_pnl_usd",
+    "Unrealized P&L per position leg",
+    ["hedge_id", "symbol", "venue", "side"],
+)
+POSITION_ENTRY_PRICE = Gauge(
+    "hedgehog_position_entry_price",
+    "Entry price per position leg",
+    ["hedge_id", "symbol", "venue", "side"],
+)
+POSITION_MARK_PRICE = Gauge(
+    "hedgehog_position_mark_price",
+    "Current mark price per position leg",
+    ["hedge_id", "symbol", "venue", "side"],
+)
 
 # ── Funding rates ────────────────────────────────────────────────────────────
 
 FUNDING_RATE = Gauge(
     "hedgehog_funding_rate_annualized",
     "Annualized funding rate (decimal)",
+    ["venue", "symbol"],
+)
+FUNDING_RATE_RAW = Gauge(
+    "hedgehog_funding_rate_raw",
+    "Raw funding rate per cycle",
+    ["venue", "symbol"],
+)
+FUNDING_RATE_PREDICTED = Gauge(
+    "hedgehog_funding_rate_predicted",
+    "Predicted next funding rate (annualized)",
     ["venue", "symbol"],
 )
 BEST_SPREAD = Gauge(
@@ -58,15 +98,96 @@ OPPORTUNITIES_FOUND = Gauge(
     "hedgehog_opportunities_found", "Number of opportunities above threshold"
 )
 
+# ── Per-venue funding payments ───────────────────────────────────────────────
+
+VENUE_FUNDING_COLLECTED = Gauge(
+    "hedgehog_venue_funding_collected_usd",
+    "Funding collected on this venue across all positions",
+    ["venue"],
+)
+
+# ── Market data (per-venue, per-symbol) ──────────────────────────────────────
+
+MARK_PRICE = Gauge(
+    "hedgehog_mark_price", "Mark price", ["venue", "symbol"]
+)
+INDEX_PRICE = Gauge(
+    "hedgehog_index_price", "Index price", ["venue", "symbol"]
+)
+OPEN_INTEREST = Gauge(
+    "hedgehog_open_interest_usd", "Open interest in USD", ["venue", "symbol"]
+)
+ORDERBOOK_SPREAD_BPS = Gauge(
+    "hedgehog_orderbook_spread_bps", "Best bid-ask spread in basis points", ["venue", "symbol"]
+)
+ORDERBOOK_BID_DEPTH_USD = Gauge(
+    "hedgehog_orderbook_bid_depth_usd", "Bid depth within 1% of mid price", ["venue", "symbol"]
+)
+ORDERBOOK_ASK_DEPTH_USD = Gauge(
+    "hedgehog_orderbook_ask_depth_usd", "Ask depth within 1% of mid price", ["venue", "symbol"]
+)
+
 # ── Venue health ─────────────────────────────────────────────────────────────
 
 VENUE_SCORE = Gauge(
     "hedgehog_venue_score", "Composite venue score (0-1)", ["venue"]
 )
+VENUE_SCORE_COMPONENT = Gauge(
+    "hedgehog_venue_score_component",
+    "Individual venue score component",
+    ["venue", "component"],
+)
 VENUE_UP = Gauge(
     "hedgehog_venue_up", "Whether venue is connected (1=up, 0=down)", ["venue"]
 )
 VENUES_HEALTHY = Gauge("hedgehog_venues_healthy", "Count of healthy venues")
+VENUE_API_LATENCY = Histogram(
+    "hedgehog_venue_api_latency_seconds",
+    "API call latency per venue",
+    ["venue", "endpoint"],
+    buckets=[0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
+)
+
+# ── Venue balances ───────────────────────────────────────────────────────────
+
+VENUE_BALANCE_AVAILABLE = Gauge(
+    "hedgehog_venue_balance_available_usd",
+    "Available (withdrawable) balance on venue",
+    ["venue"],
+)
+VENUE_BALANCE_TOTAL = Gauge(
+    "hedgehog_venue_balance_total_usd",
+    "Total balance (collateral) on venue",
+    ["venue"],
+)
+VENUE_MARGIN_USED = Gauge(
+    "hedgehog_venue_margin_used_usd",
+    "Margin currently used on venue",
+    ["venue"],
+)
+VENUE_MARGIN_RATIO = Gauge(
+    "hedgehog_venue_margin_ratio",
+    "Margin ratio on venue (available / total)",
+    ["venue"],
+)
+
+# ── Venue exposure ───────────────────────────────────────────────────────────
+
+VENUE_EXPOSURE_PCT = Gauge(
+    "hedgehog_venue_exposure_pct",
+    "Venue exposure as percentage of NAV",
+    ["venue"],
+)
+VENUE_POSITION_COUNT = Gauge(
+    "hedgehog_venue_position_count",
+    "Number of position legs on this venue",
+    ["venue"],
+)
+VENUE_NOTIONAL_USD = Gauge(
+    "hedgehog_venue_notional_usd",
+    "Total notional value of positions on this venue",
+    ["venue"],
+)
 
 # ── Risk ─────────────────────────────────────────────────────────────────────
 
@@ -111,6 +232,69 @@ TRADE_DECISIONS = Counter(
 )
 FEES_PAID_USD = Counter("hedgehog_fees_paid_usd_total", "Cumulative fees paid in USD")
 GAS_PAID_USD = Counter("hedgehog_gas_paid_usd_total", "Cumulative gas paid in USD")
+VENUE_FEES_PAID_USD = Counter(
+    "hedgehog_venue_fees_paid_usd_total",
+    "Cumulative trading fees paid on venue",
+    ["venue"],
+)
+VENUE_GAS_PAID_USD = Counter(
+    "hedgehog_venue_gas_paid_usd_total",
+    "Cumulative gas paid on venue",
+    ["venue"],
+)
+
+# ── Orders ───────────────────────────────────────────────────────────────────
+
+OPEN_ORDERS = Gauge(
+    "hedgehog_open_orders",
+    "Number of currently open orders on venue",
+    ["venue"],
+)
+ORDER_FILLS_TOTAL = Counter(
+    "hedgehog_order_fills_total",
+    "Total order fills",
+    ["venue", "symbol", "side", "status"],
+)
+ORDER_ERRORS_TOTAL = Counter(
+    "hedgehog_order_errors_total",
+    "Total order errors",
+    ["venue", "error_type"],
+)
+ORDER_SLIPPAGE_BPS = Histogram(
+    "hedgehog_order_slippage_bps",
+    "Order slippage in basis points",
+    ["venue"],
+    buckets=[0, 1, 2, 5, 10, 20, 50, 100],
+)
+ORDER_FILL_TIME = Histogram(
+    "hedgehog_order_fill_time_seconds",
+    "Time to fill an order",
+    ["venue"],
+    buckets=[0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+)
+ROLLBACKS_TOTAL = Counter(
+    "hedgehog_rollbacks_total",
+    "Total rollback events",
+    ["venue"],
+)
+
+# ── Funding rate statistics ──────────────────────────────────────────────────
+
+FUNDING_RATE_MEAN_24H = Gauge(
+    "hedgehog_funding_rate_mean_24h",
+    "Mean annualized funding rate over last 24h",
+    ["venue", "symbol"],
+)
+FUNDING_RATE_STD_24H = Gauge(
+    "hedgehog_funding_rate_std_24h",
+    "Std dev of funding rate over last 24h",
+    ["venue", "symbol"],
+)
+FUNDING_RATE_FLIPS_24H = Gauge(
+    "hedgehog_funding_rate_flips_24h",
+    "Number of funding rate sign flips in last 24h",
+    ["venue", "symbol"],
+)
 
 
 def start_metrics_server(port: int = 8000) -> None:
