@@ -1,0 +1,232 @@
+# aegis-protocol/config/venues.yaml
+# Configuration for all DeFi perpetual venues
+
+symbols:
+  - BTC
+  - ETH
+  - SOL
+  - ARB
+  - DOGE
+  - AVAX
+  - LINK
+  - SUI
+  - WIF
+  - PEPE
+  - AAVE
+  - NEAR
+
+venues:
+  hyperliquid:
+    name: Hyperliquid
+    chain: hyperliquid_l1
+    chain_type: evm
+    settlement_chain: hyperliquid_l1
+    funding_cycle_hours: 1
+    maker_fee_bps: 1.5
+    taker_fee_bps: 4.5
+    max_leverage: 50
+    collateral_token: USDC
+    api_base_url: https://api.hyperliquid.xyz
+    ws_url: wss://api.hyperliquid.xyz/ws
+    deposit_chain: arbitrum
+    tier: tier_1
+    zero_gas: true
+    has_escape_hatch: false
+    has_privacy: false
+    has_anti_mev: false
+    yield_bearing_collateral: false
+    symbol_format: "{symbol}"   # BTC, ETH
+    # Normalized symbols where venue uses different naming
+    symbol_overrides: {}
+
+  lighter:
+    name: Lighter
+    chain: lighter_zk
+    chain_type: evm
+    settlement_chain: ethereum
+    funding_cycle_hours: 1
+    maker_fee_bps: 0.0
+    taker_fee_bps: 0.0
+    max_leverage: 50
+    collateral_token: USDC
+    api_base_url: https://api.lighter.xyz
+    ws_url: wss://stream.lighter.xyz
+    deposit_chain: ethereum
+    tier: tier_2
+    zero_gas: true
+    has_escape_hatch: true        # Desert Mode — force exit via L1
+    has_privacy: false
+    has_anti_mev: true            # ZK-verified fair matching
+    yield_bearing_collateral: false
+    symbol_format: "{symbol}-USD"
+
+  aster:
+    name: Aster
+    chain: bnb_chain
+    chain_type: evm
+    settlement_chain: bnb_chain
+    funding_cycle_hours: 8
+    maker_fee_bps: 2.0
+    taker_fee_bps: 5.0
+    max_leverage: 200
+    collateral_token: USDT
+    api_base_url: https://fapi.asterdex.com
+    ws_url: wss://fstream.asterdex.com/ws
+    deposit_chain: bnb
+    tier: tier_2
+    zero_gas: true
+    has_escape_hatch: false
+    has_privacy: true             # Hidden orders
+    has_anti_mev: true            # MEV-resistant
+    yield_bearing_collateral: false
+    symbol_format: "{symbol}USDT"
+
+  drift:
+    name: Drift
+    chain: solana
+    chain_type: solana
+    settlement_chain: solana
+    funding_cycle_hours: 1
+    maker_fee_bps: 0.0
+    taker_fee_bps: 3.0
+    max_leverage: 20
+    collateral_token: USDC
+    api_base_url: https://dlob.drift.trade
+    ws_url: wss://dlob.drift.trade/ws
+    deposit_chain: solana
+    tier: tier_1
+    zero_gas: false
+    has_escape_hatch: false
+    has_privacy: false
+    has_anti_mev: false
+    yield_bearing_collateral: false
+    symbol_format: "{symbol}-PERP"
+
+  dydx:
+    name: dYdX v4
+    chain: dydx_cosmos
+    chain_type: cosmos
+    settlement_chain: dydx_cosmos
+    funding_cycle_hours: 1
+    maker_fee_bps: 1.0
+    taker_fee_bps: 5.0
+    max_leverage: 20
+    collateral_token: USDC
+    api_base_url: https://indexer.dydx.trade/v4
+    ws_url: wss://indexer.dydx.trade/v4/ws
+    deposit_chain: noble
+    tier: tier_1
+    zero_gas: false
+    has_escape_hatch: false
+    has_privacy: false
+    has_anti_mev: false
+    yield_bearing_collateral: false
+    symbol_format: "{symbol}-USD"
+
+  apex:
+    name: ApeX Omni
+    chain: multi_zklink
+    chain_type: evm
+    settlement_chain: ethereum
+    funding_cycle_hours: 8
+    maker_fee_bps: 0.0
+    taker_fee_bps: 2.5
+    max_leverage: 100
+    collateral_token: USDT
+    api_base_url: https://omni.apex.exchange/api/v3
+    ws_url: wss://omni.apex.exchange/realtime
+    deposit_chain: arbitrum
+    tier: tier_3
+    zero_gas: true
+    has_escape_hatch: true        # Forced withdrawals via ZK contracts
+    has_privacy: false
+    has_anti_mev: true            # Anti-MEV on spot
+    yield_bearing_collateral: false
+    symbol_format: "{symbol}USDT"
+
+  paradex:
+    name: Paradex
+    chain: paradex_starknet
+    chain_type: starknet
+    settlement_chain: ethereum
+    funding_cycle_hours: 1
+    maker_fee_bps: 0.0
+    taker_fee_bps: 2.0            # 0 for UI, 2 for API
+    max_leverage: 50
+    collateral_token: USDC
+    api_base_url: https://api.paradex.trade/v1
+    ws_url: wss://ws.api.paradex.trade/v1
+    deposit_chain: ethereum
+    tier: tier_2
+    zero_gas: false
+    has_escape_hatch: true        # Starknet validity proofs
+    has_privacy: true             # Hidden positions/orders/trades
+    has_anti_mev: true            # Privacy prevents front-running
+    yield_bearing_collateral: false
+    symbol_format: "{symbol}-USD-PERP"
+
+  ethereal:
+    name: Ethereal
+    chain: converge
+    chain_type: evm
+    settlement_chain: arbitrum
+    funding_cycle_hours: 8
+    maker_fee_bps: 2.0
+    taker_fee_bps: 5.0
+    max_leverage: 20
+    collateral_token: USDe
+    api_base_url: https://api.ethereal.trade
+    ws_url: wss://ws.ethereal.trade
+    deposit_chain: arbitrum
+    tier: tier_3
+    zero_gas: false
+    has_escape_hatch: false
+    has_privacy: false
+    has_anti_mev: false
+    yield_bearing_collateral: true   # USDe earns Ethena yield (~15-25% APY)
+    symbol_format: "{symbol}-USD"
+
+  injective:
+    name: Injective
+    chain: injective_l1
+    chain_type: cosmos
+    settlement_chain: injective_l1
+    funding_cycle_hours: 1
+    maker_fee_bps: 0.0
+    taker_fee_bps: 1.8
+    max_leverage: 20
+    collateral_token: USDT
+    api_base_url: https://sentry.exchange.grpc-web.injective.network
+    ws_url: wss://sentry.exchange.grpc-web.injective.network/stream
+    deposit_chain: ethereum
+    tier: tier_2
+    zero_gas: true                   # Zero gas for trading
+    has_escape_hatch: false
+    has_privacy: false
+    has_anti_mev: true               # Frequent Batch Auctions
+    yield_bearing_collateral: false
+    symbol_format: "{symbol}/USDT PERP"
+
+# Data sources for funding rate aggregation
+data_sources:
+  coinglass:
+    api_url: https://open-api-v3.coinglass.com
+    endpoints:
+      funding_rate: /api/futures/funding/current
+      funding_history: /api/futures/funding/history
+      funding_arbitrage: /api/futures/fundingRate/arbitrage
+      open_interest: /api/futures/openInterest/current
+    # CoinGlass exchange IDs for our DeFi venues
+    exchange_mapping:
+      hyperliquid: Hyperliquid
+      dydx: dYdX
+      # Not all DeFi venues are on CoinGlass — supplement with direct API
+
+  loris:
+    base_url: https://loris.tools
+    # Loris covers: Hyperliquid, Drift, Lighter, Paradex, Aster, Ethereal, etc.
+    # Great for historical comparison charts
+
+  defillama:
+    perps_url: https://api.llama.fi/overview/derivatives
+    # Volume and TVL rankings

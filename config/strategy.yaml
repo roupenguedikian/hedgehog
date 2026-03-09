@@ -1,0 +1,47 @@
+# aegis-protocol/config/strategy.yaml
+
+# Minimum annualized funding rate spread to enter a hedge
+min_spread_annual: 0.10          # 10% annualized spread between short and long venue
+
+# Minimum score for a venue to be tradeable
+min_venue_score: 0.40
+
+# Maximum number of simultaneous hedge positions
+max_positions: 12
+
+# Position sizing
+max_single_position_pct: 0.20    # 20% of NAV per hedge position
+kelly_fraction: 0.25             # Quarter-Kelly for conservative sizing
+
+# Execution
+max_slippage_bps: 20             # 20 bps max combined slippage on entry
+max_leg_time_delta_ms: 2000      # Both legs must fill within 2 seconds
+max_imbalance_pct: 0.03          # Legs must match within 3%
+
+# Exit thresholds
+exit_spread_annual: 0.03         # Exit if spread compresses below 3%
+max_hold_days: 30                # Re-evaluate any position held > 30 days
+
+# Rotation
+min_rotation_improvement: 0.05   # Only rotate if new venue improves yield by 5%+ annualized
+bridge_opportunity_cost_multiplier: 1.5  # Require 1.5x improvement to cover bridge downtime
+
+# Scoring weights (must sum to 1.0)
+scoring_weights:
+  avg_funding_rate: 0.25
+  funding_consistency: 0.20
+  liquidity_depth: 0.20
+  trading_fees: 0.15
+  funding_cycle: 0.10
+  contract_maturity: 0.05
+  uptime: 0.05
+
+# Agent loop timing
+data_refresh_interval_sec: 30
+strategy_eval_interval_sec: 60
+risk_check_interval_sec: 15
+portfolio_update_interval_sec: 5
+
+# Operating modes
+mode: OBSERVE_ONLY   # FULL_AUTO | SEMI_AUTO | SUPERVISED | OBSERVE_ONLY
+human_approval_threshold_usd: 10000  # In SEMI_AUTO, trades above this need approval

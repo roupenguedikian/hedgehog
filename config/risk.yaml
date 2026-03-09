@@ -1,0 +1,33 @@
+# aegis-protocol/config/risk.yaml
+# READ-ONLY AT RUNTIME — no agent can modify these values
+
+max_drawdown_pct: 5.0              # Hard drawdown limit from peak NAV
+max_single_venue_pct: 25.0         # Max allocation to any single venue
+max_single_chain_pct: 40.0         # Max allocation to venues on same chain
+max_margin_utilization: 0.60       # Never use more than 60% of available margin
+max_in_transit_pct: 10.0           # Max capital in bridge transit
+max_single_pair_pct: 25.0          # Max allocation to a single trading pair
+
+# Oracle safety
+max_price_divergence_pct: 0.5      # Flag if mark prices diverge > 0.5% across venues
+stale_data_threshold_sec: 300      # Don't trade on data older than 5 minutes
+
+# Chain health
+chain_block_miss_threshold_sec: 30 # Reduce exposure if chain misses blocks > 30s
+
+# Liquidation proximity
+min_margin_ratio: 1.50             # Alert if margin ratio drops below 150%
+emergency_margin_ratio: 1.10       # Force close if margin ratio drops below 110%
+
+# Venue trust tiers — max allocation per tier
+tier_limits:
+  tier_1: 0.35                     # Hyperliquid, dYdX, Drift
+  tier_2: 0.25                     # Lighter, Paradex, Injective, Aster
+  tier_3: 0.15                     # ApeX, Ethereal
+
+# Circuit breaker triggers
+circuit_breaker:
+  max_loss_usd: 10000              # Absolute loss threshold
+  max_drawdown_pct: 7.0            # Hard stop
+  liquidation_cascade_count: 3     # If 3+ liquidations in watched pairs in 1h
+  exchange_down_sec: 120           # API unreachable for > 2 min
