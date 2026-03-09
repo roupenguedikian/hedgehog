@@ -207,7 +207,7 @@ async def run_score_only(configs: dict):
 
 
 async def run_collect_only(configs: dict):
-    """Run the funding rate collector continuously."""
+    """Run the funding rate collector continuously, exporting metrics to Prometheus."""
     venue_configs = build_venue_configs(configs["venues"])
     adapters = build_adapters(venue_configs)
     symbols = configs["venues"].get("symbols", ["BTC", "ETH", "SOL"])
@@ -215,6 +215,7 @@ async def run_collect_only(configs: dict):
 
     from services.data.coinglass_client import CoinglassClient, DefiLlamaClient
     from services.data.funding_collector import FundingRateCollector
+    from services.monitoring import metrics as m
 
     coinglass = CoinglassClient()
     defillama = DefiLlamaClient()
@@ -222,10 +223,65 @@ async def run_collect_only(configs: dict):
     collector = FundingRateCollector(
         adapters=connected, symbols=symbols,
         coinglass=coinglass, defillama=defillama,
+        min_spread_annual=configs["strategy"].get("min_spread_annual", 0.10),
     )
 
+    async def collect_and_export():
+        """Collect once and push all metrics to Prometheus gauges."""
+        await collector.collect_once()
+
+        # Venue health
+        healthy = 0
+        for name in connected:
+            m.VENUE_UP.labels(venue=name).set(1)
+            healthy += 1
+        m.VENUES_HEALTHY.set(healthy)
+
+        # Funding rates (annualized, raw, predicted) + market data
+        for (venue, symbol), rate in collector.latest_rates.items():
+            m.FUNDING_RATE.labels(venue=venue, symbol=symbol).set(rate.annualized)
+            m.FUNDING_RATE_RAW.labels(venue=venue, symbol=symbol).set(rate.rate)
+            if rate.predicted_rate is not None:
+                predicted_ann = rate.predicted_rate * (8760 / rate.cycle_hours)
+                m.FUNDING_RATE_PREDICTED.labels(venue=venue, symbol=symbol).set(predicted_ann)
+            if rate.mark_price:
+                m.MARK_PRICE.labels(venue=venue, symbol=symbol).set(rate.mark_price)
+            if rate.index_price:
+                m.INDEX_PRICE.labels(venue=venue, symbol=symbol).set(rate.index_price)
+
+        # 24h statistics
+        for venue_name in connected:
+            for symbol in symbols:
+                stats = collector.get_historical_stats(venue_name, symbol, hours=24)
+                if stats["count"] > 0:
+                    cycle_h = venue_configs.get(
+                        venue_name,
+                        venue_configs.get(list(venue_configs.keys())[0]),
+                    ).funding_cycle_hours
+                    m.FUNDING_RATE_MEAN_24H.labels(venue=venue_name, symbol=symbol).set(
+                        stats["mean"] * (8760 / cycle_h)
+                    )
+                    m.FUNDING_RATE_STD_24H.labels(venue=venue_name, symbol=symbol).set(stats["std"])
+                    m.FUNDING_RATE_FLIPS_24H.labels(venue=venue_name, symbol=symbol).set(stats["flip_count"])
+
+        # Opportunities
+        opps = collector.latest_opportunities
+        m.OPPORTUNITIES_FOUND.set(len(opps))
+        for opp in opps[:8]:
+            m.BEST_SPREAD.labels(
+                symbol=opp.symbol,
+                short_venue=opp.short_venue,
+                long_venue=opp.long_venue,
+            ).set(opp.spread_annual)
+
     logger.info("Starting continuous collection (Ctrl+C to stop)...")
-    await collector.run_continuous(interval_sec=30)
+    interval_sec = 30
+    while True:
+        try:
+            await collect_and_export()
+        except Exception as e:
+            logger.error("funding.collector_cycle_error", error=str(e))
+        await asyncio.sleep(interval_sec)
 
 
 async def run_full_bot(configs: dict, mode: str):
@@ -299,16 +355,22 @@ async def run_full_bot(configs: dict, mode: str):
                 healthy += 1
             m.VENUES_HEALTHY.set(healthy)
             for vs in (scores or []):
-                venue_name = vs.get("venue") or vs.get("name", "")
+                venue_name = vs.venue
                 if venue_name:
                     m.VENUE_SCORE.labels(venue=venue_name).set(
-                        vs.get("score", 0)
+                        vs.composite_score
                     )
-                    # Score components
-                    for comp in ["avg_funding_rate", "funding_consistency",
-                                 "liquidity_depth", "trading_fees",
-                                 "funding_cycle", "contract_maturity", "uptime"]:
-                        val = vs.get(comp, vs.get(f"{comp}_score", 0))
+                    # Score components from VenueScore model fields
+                    component_map = {
+                        "avg_funding_rate": vs.avg_funding_rate_30d,
+                        "funding_consistency": vs.funding_rate_std_30d,
+                        "liquidity_depth": vs.liquidity_depth_1pct_usd,
+                        "trading_fees": vs.trading_fee_bps,
+                        "funding_cycle": vs.funding_cycle_hours,
+                        "contract_maturity": vs.contract_age_months,
+                        "uptime": vs.uptime_30d,
+                    }
+                    for comp, val in component_map.items():
                         if val:
                             m.VENUE_SCORE_COMPONENT.labels(
                                 venue=venue_name, component=comp
@@ -508,7 +570,10 @@ async def run_full_bot(configs: dict, mode: str):
                 logger.warning("bot.circuit_breaker_active")
                 await asyncio.sleep(30)
                 continue
-            await engine.run_cycle()
+            try:
+                await engine.run_cycle()
+            except Exception as e:
+                logger.error("bot.cycle_error", error=str(e), cycle=engine.cycle_count)
             await asyncio.sleep(interval)
     except KeyboardInterrupt:
         logger.info("bot.stopped")

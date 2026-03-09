@@ -129,7 +129,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -182,7 +182,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -231,7 +231,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -280,7 +280,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -328,7 +328,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -384,7 +384,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -436,7 +436,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -523,7 +523,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -625,7 +625,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -696,7 +696,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -759,7 +759,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -828,7 +828,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -885,7 +885,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -942,7 +942,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -999,7 +999,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -1056,7 +1056,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -1113,7 +1113,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -1175,7 +1175,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -1231,7 +1231,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -1290,7 +1290,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -1333,7 +1333,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -1421,7 +1421,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -1497,7 +1497,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     },
     {
@@ -1540,7 +1540,7 @@
       ],
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "hedgehog-prometheus"
       }
     }
   ],
