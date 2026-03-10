@@ -51,11 +51,89 @@ def ts(ms):
 # PUBLIC — no auth needed
 # ═══════════════════════════════════════════════════════════════
 
+def _infer_cycle_hours(next_funding_ms: int) -> int:
+    """
+    Infer funding cycle (1h, 4h, or 8h) from nextFundingTime.
+    - 1h-cycle symbols settle on every hour
+    - 4h-cycle symbols settle at 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
+    - 8h-cycle symbols settle at 00:00, 08:00, 16:00
+    We distinguish by checking which schedule the next time fits.
+    """
+    if not next_funding_ms:
+        return 8
+    dt = datetime.fromtimestamp(next_funding_ms / 1000, tz=timezone.utc)
+    hour = dt.hour
+    # 8h: settles at 0, 8, 16 only
+    # 4h: settles at 0, 4, 8, 12, 16, 20
+    # 1h: settles every hour
+    if hour % 8 == 0:
+        # Could be 1h, 4h, or 8h — ambiguous, need more info
+        # Default to 8h (most common for this alignment)
+        return 8
+    elif hour % 4 == 0:
+        return 4
+    else:
+        return 1
+
+
+async def _build_cycle_map(client) -> dict[str, int]:
+    """
+    Build a map of symbol → cycle_hours by checking funding history
+    for symbols whose cycle is ambiguous from nextFundingTime alone.
+    Fetches premiumIndex (all symbols) and samples funding history
+    for one symbol per distinct nextFundingTime group.
+    """
+    resp = await client.get("/fapi/v1/premiumIndex")
+    resp.raise_for_status()
+    all_premium = resp.json()
+
+    # Group symbols by nextFundingTime
+    from collections import defaultdict
+    nft_groups: dict[int, list[str]] = defaultdict(list)
+    for p in all_premium:
+        nft = int(p.get("nextFundingTime", 0))
+        nft_groups[nft].append(p["symbol"])
+
+    # For each distinct nextFundingTime, sample one symbol's history
+    group_cycle: dict[int, int] = {}
+    for nft, syms in nft_groups.items():
+        try:
+            resp2 = await client.get(
+                "/fapi/v1/fundingRate",
+                params={"symbol": syms[0], "limit": 2},
+            )
+            resp2.raise_for_status()
+            history = resp2.json()
+            if len(history) >= 2:
+                diff_h = round(
+                    (int(history[1]["fundingTime"]) - int(history[0]["fundingTime"]))
+                    / (1000 * 3600)
+                )
+                if diff_h in (1, 4, 8):
+                    group_cycle[nft] = diff_h
+                else:
+                    group_cycle[nft] = 8
+            else:
+                group_cycle[nft] = _infer_cycle_hours(nft)
+        except Exception:
+            group_cycle[nft] = _infer_cycle_hours(nft)
+
+    # Build per-symbol map
+    cycle_map: dict[str, int] = {}
+    for p in all_premium:
+        nft = int(p.get("nextFundingTime", 0))
+        cycle_map[p["symbol"]] = group_cycle.get(nft, 8)
+
+    return cycle_map
+
+
 async def funding(client):
-    """Top 20 funding rates by volume + extreme rates."""
+    """Top 20 funding rates by volume + extreme rates, with correct per-symbol annualization."""
     print("=" * 80)
     print("  Aster — FUNDING RATES (top 20 by 24h volume)")
     print("=" * 80)
+
+    cycle_map = await _build_cycle_map(client)
 
     resp = await client.get("/fapi/v1/premiumIndex")
     resp.raise_for_status()
@@ -73,39 +151,47 @@ async def funding(client):
         rate = float(p.get("lastFundingRate") or 0)
         mark = float(p.get("markPrice") or 0)
         index_px = float(p.get("indexPrice") or 0)
-        ann = rate * 1095  # 8h cycle
+        cycle_h = cycle_map.get(sym, 8)
+        payments_per_year = 365 * (24 / cycle_h)
+        ann = rate * payments_per_year
         chg = float(t.get("priceChangePercent") or 0)
         assets.append({
             "symbol": sym, "rate": rate, "annualized": ann,
-            "mark": mark, "index": index_px, "volume_24h": vol, "chg": chg,
+            "mark": mark, "index": index_px, "volume_24h": vol,
+            "chg": chg, "cycle_h": cycle_h,
         })
 
     top20 = sorted(assets, key=lambda x: x["volume_24h"], reverse=True)[:20]
-    print(f"\n  {'SYMBOL':>12s} | {'RATE/8H':>10s} | {'ANNUAL':>8s} | {'MARK':>12s} | "
+    print(f"\n  {'SYMBOL':>12s} | {'RATE':>10s} | {'CYCLE':>5s} | {'ANNUAL':>8s} | {'MARK':>12s} | "
           f"{'INDEX':>12s} | {'24H VOL':>16s} | {'CHG%':>7s}")
-    print("  " + "-" * 95)
+    print("  " + "-" * 103)
     for a in top20:
-        print(f"  {a['symbol']:>12s} | {a['rate']*100:>9.4f}% | {a['annualized']*100:>7.2f}% | "
+        print(f"  {a['symbol']:>12s} | {a['rate']*100:>9.4f}% | {a['cycle_h']:>4d}h | {a['annualized']*100:>7.2f}% | "
               f"${a['mark']:>11,.2f} | ${a['index']:>11,.2f} | ${a['volume_24h']:>15,.0f} | "
               f"{a['chg']:>+6.2f}%")
 
     by_rate = sorted(assets, key=lambda x: x["annualized"], reverse=True)
     print(f"\n  EXTREME FUNDING (top 5 highest + top 5 most negative)")
-    print(f"  {'SYMBOL':>12s} | {'ANNUAL':>8s} | {'MARK':>12s} | {'24H VOL':>16s}")
-    print("  " + "-" * 60)
+    print(f"  {'SYMBOL':>12s} | {'CYCLE':>5s} | {'ANNUAL':>8s} | {'MARK':>12s} | {'24H VOL':>16s}")
+    print("  " + "-" * 65)
     print("  -- HIGHEST --")
     for a in by_rate[:5]:
-        print(f"  {a['symbol']:>12s} | {a['annualized']*100:>+7.2f}% | ${a['mark']:>11,.4f} | "
+        print(f"  {a['symbol']:>12s} | {a['cycle_h']:>4d}h | {a['annualized']*100:>+7.2f}% | ${a['mark']:>11,.4f} | "
               f"${a['volume_24h']:>15,.0f}")
     print("  -- MOST NEGATIVE --")
     for a in by_rate[-5:]:
-        print(f"  {a['symbol']:>12s} | {a['annualized']*100:>+7.2f}% | ${a['mark']:>11,.4f} | "
+        print(f"  {a['symbol']:>12s} | {a['cycle_h']:>4d}h | {a['annualized']*100:>+7.2f}% | ${a['mark']:>11,.4f} | "
               f"${a['volume_24h']:>15,.0f}")
+
+    # Cycle distribution
+    from collections import Counter
+    cycle_counts = Counter(a["cycle_h"] for a in assets)
+    print(f"\n  Cycle distribution: " + ", ".join(f"{h}h={n}" for h, n in sorted(cycle_counts.items())))
 
     total_vol = sum(a["volume_24h"] for a in assets)
     active = len([a for a in assets if a["volume_24h"] > 0])
     avg_rate = sum(a["annualized"] for a in top20) / len(top20) if top20 else 0
-    print(f"\n  Total 24h volume: ${total_vol:,.0f}")
+    print(f"  Total 24h volume: ${total_vol:,.0f}")
     print(f"  Active markets: {active}/{len(assets)}")
     print(f"  Avg annualized rate (top 20): {avg_rate*100:.2f}%")
 

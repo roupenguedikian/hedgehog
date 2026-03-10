@@ -19,9 +19,15 @@ import httpx
 load_dotenv()
 
 BASE_URL = "https://mainnet.zklighter.elliot.ai"
-DEFAULT_ACCOUNT_INDEX = int(os.getenv("LIGHTER_ACCOUNT_INDEX", "701177"))
+_acct_idx = os.getenv("LIGHTER_ACCOUNT_INDEX", "")
+if not _acct_idx:
+    sys.exit("ERROR: LIGHTER_ACCOUNT_INDEX not set in .env")
+DEFAULT_ACCOUNT_INDEX = int(_acct_idx)
 API_KEY_PRIVATE = os.getenv("LIGHTER_API_KEY_PRIVATE_KEY", os.getenv("LIGHTER_API_KEY_PRIVATE", ""))
-API_KEY_INDEX = int(os.getenv("LIGHTER_API_KEY_INDEX", "7"))
+_api_idx = os.getenv("LIGHTER_API_KEY_INDEX", "")
+if not _api_idx:
+    sys.exit("ERROR: LIGHTER_API_KEY_INDEX not set in .env")
+API_KEY_INDEX = int(_api_idx)
 
 MARKET_NAMES = {
     0: "ETH", 1: "BTC", 2: "SOL", 3: "DOGE", 7: "XRP", 8: "LINK", 9: "AVAX",

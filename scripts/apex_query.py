@@ -1,339 +1,552 @@
 #!/usr/bin/env python3
 """
-Query Apex Omni exchange — public market data + authenticated account data.
+Apex Omni query tool — used by the /apex Claude skill.
+Usage: python3 scripts/apex_query.py [funding|account|positions|orders|fills|history|transfers|all]
 """
+import asyncio
 import base64
 import hashlib
 import hmac
 import os
+import sys
 import time
 from datetime import datetime, timezone
 
 import httpx
-from dotenv import load_dotenv
 
-load_dotenv()
+
+# ── Load .env ────────────────────────────────────────────────────────
+def load_env(path):
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"'))
+
+
+load_env(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 BASE = "https://omni.apex.exchange"
+API_KEY = os.environ.get("APEX_OMNI_API_KEY", "")
+API_SECRET = os.environ.get("APEX_OMNI_API_SECRET", "")
+PASSPHRASE = os.environ.get("APEX_OMNI_PASSPHRASE", "")
 
-API_KEY = os.getenv("APEX_OMNI_API_KEY", "")
-API_SECRET = os.getenv("APEX_OMNI_API_SECRET", "")
-PASSPHRASE = os.getenv("APEX_OMNI_PASSPHRASE", "")
+HAS_AUTH = bool(API_KEY and API_SECRET and PASSPHRASE)
 
 
-def sign_request(secret: str, timestamp: str, method: str, request_path: str, data_string: str = "") -> str:
-    """HMAC-SHA256 signature matching the apexomni SDK."""
+# ── Auth helpers ─────────────────────────────────────────────────────
+
+def sign_request(secret: str, timestamp: str, method: str,
+                 request_path: str, data_string: str = "") -> str:
+    """HMAC-SHA256 signature matching the apexomni SDK convention."""
     message = timestamp + method.upper() + request_path + data_string
-    # SDK uses: base64.standard_b64encode(secret.encode())
     hmac_key = base64.standard_b64encode(secret.encode("utf-8"))
     sig = hmac.new(hmac_key, message.encode("utf-8"), hashlib.sha256)
     return base64.standard_b64encode(sig.digest()).decode()
 
 
-def auth_headers(method: str, request_path: str, data_string: str = "") -> dict:
-    timestamp = str(int(round(time.time() * 1000)))
-    sig = sign_request(API_SECRET, timestamp, method, request_path, data_string)
-    return {
-        "APEX-SIGNATURE": sig,
-        "APEX-API-KEY": API_KEY,
-        "APEX-TIMESTAMP": timestamp,
-        "APEX-PASSPHRASE": PASSPHRASE,
-    }
-
-
-def auth_get(client: httpx.Client, path: str, params: dict | None = None) -> httpx.Response:
-    """Authenticated GET — query params are included in the signed path."""
+def auth_get(client: httpx.AsyncClient, path: str,
+             params: dict | None = None) -> httpx.Response:
+    """Authenticated GET — query params are embedded in the signed path."""
     if params:
         qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()) if v is not None)
         full_path = f"{path}?{qs}" if qs else path
     else:
         full_path = path
-    headers = auth_headers("GET", full_path)
-    return client.get(f"{BASE}{path}", headers=headers, params=params)
+    timestamp = str(int(round(time.time() * 1000)))
+    sig = sign_request(API_SECRET, timestamp, "GET", full_path)
+    headers = {
+        "APEX-SIGNATURE": sig,
+        "APEX-API-KEY": API_KEY,
+        "APEX-TIMESTAMP": timestamp,
+        "APEX-PASSPHRASE": PASSPHRASE,
+    }
+    return client.get(BASE + path, headers=headers, params=params)
 
 
-def main():
-    with httpx.Client(timeout=15.0) as c:
-        print("=" * 70)
-        print("  APEX OMNI EXCHANGE QUERY")
-        print("=" * 70)
-
-        # ── 1. Funding Rates ────────────────────────────────────────────
-        print("\n  FUNDING RATES")
-        print("-" * 70)
-        symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "SUIUSDT",
-                    "LINKUSDT", "ARBUSDT", "AVAXUSDT", "WIFUSDT", "NEARUSDT", "AAVEUSDT"]
-        for sym in symbols:
-            try:
-                r = c.get(f"{BASE}/api/v3/ticker", params={"symbol": sym})
-                items = r.json().get("data", [])
-                if items and isinstance(items, list) and items[0]:
-                    d = items[0]
-                    fr = d.get("fundingRate", "?")
-                    pfr = d.get("predictedFundingRate", "?")
-                    last = d.get("lastPrice", "?")
-                    oi = d.get("openInterest", "?")
-                    hi = d.get("highPrice24h", "?")
-                    lo = d.get("lowPrice24h", "?")
-                    try:
-                        ann = float(fr) * (8760 / 8) * 100
-                        ann_s = f"{ann:+.2f}%"
-                    except (ValueError, TypeError):
-                        ann_s = "?"
-                    print(f"  {sym:<12} FR: {fr:>14}  Ann: {ann_s:>8}  "
-                          f"Last: {last:>12}  OI: {oi:>12}")
-                else:
-                    print(f"  {sym:<12} no data")
-            except Exception as e:
-                print(f"  {sym:<12} error: {e}")
-
-        # ── 2. Orderbook BTC ────────────────────────────────────────────
-        print(f"\n  ORDERBOOK — BTCUSDT (top 5)")
-        print("-" * 70)
+def ts(ms_or_iso):
+    """Convert epoch-ms or ISO string to readable timestamp."""
+    if not ms_or_iso:
+        return "N/A"
+    if isinstance(ms_or_iso, str):
         try:
-            r = c.get(f"{BASE}/api/v3/depth", params={"symbol": "BTCUSDT", "limit": 5})
-            data = r.json().get("data", {})
-            asks = data.get("a", [])[:5]
-            bids = data.get("b", [])[:5]
-            print(f"  {'ASKS':^33}  |  {'BIDS':^33}")
-            print(f"  {'Price':>15} {'Size':>15}  |  {'Price':>15} {'Size':>15}")
-            for i in range(5):
-                a = f"  {asks[i][0]:>15} {asks[i][1]:>15}" if i < len(asks) else " " * 33
-                b = f"  {bids[i][0]:>15} {bids[i][1]:>15}" if i < len(bids) else ""
-                print(f"{a}  |{b}")
-        except Exception as e:
-            print(f"  Error: {e}")
+            return ms_or_iso[:19].replace("T", " ")
+        except Exception:
+            return str(ms_or_iso)
+    try:
+        return datetime.fromtimestamp(
+            int(ms_or_iso) / 1000, tz=timezone.utc
+        ).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(ms_or_iso)
 
-        # ── 3. Authenticated endpoints ──────────────────────────────────
-        if not API_KEY:
-            print("\n  No APEX_OMNI_API_KEY — skipping auth endpoints")
-            return
 
-        print("\n  AUTHENTICATED DATA")
-        print("=" * 70)
+# ═══════════════════════════════════════════════════════════════
+# PUBLIC — no auth needed
+# ═══════════════════════════════════════════════════════════════
 
-        # Account
-        print("\n  ACCOUNT")
-        print("-" * 70)
-        r = auth_get(c, "/api/v3/account")
-        j = r.json()
-        if j.get("data"):
-            data = j["data"]
-            for key in ["id", "l2Key", "ethereumAddress", "takerFeeRate", "makerFeeRate"]:
-                if key in data:
-                    print(f"  {key}: {data[key]}")
-            # Nested account data
-            for sub_key in ["account", "accounts", "wallets"]:
-                if sub_key in data and data[sub_key]:
-                    acct = data[sub_key]
-                    if isinstance(acct, dict):
-                        print(f"\n  Account Details:")
-                        for k in ["equity", "totalAccountValue", "availableBalance",
-                                   "freeCollateral", "totalMarginUsed", "initialMarginRequirement",
-                                   "maintenanceMarginRequirement", "unrealizedPnl"]:
-                            if k in acct:
-                                print(f"    {k}: {acct[k]}")
-                        # Open positions
-                        positions = acct.get("openPositions", {})
-                        if positions:
-                            print(f"\n  Open Positions:")
-                            for sym, pos in positions.items():
-                                side = pos.get("side", "?")
-                                size = pos.get("size", "?")
-                                entry = pos.get("entryPrice", "?")
-                                upnl = pos.get("unrealizedPnl", "?")
-                                liq = pos.get("liquidationPrice", "?")
-                                print(f"    {sym:<14} {side:<6} Size: {size:>10}  Entry: {entry:>12}  "
-                                      f"uPnL: {upnl:>10}  Liq: {liq}")
-                    elif isinstance(acct, list):
-                        for a in acct:
-                            print(f"\n  Account: {a.get('id', '?')}")
-                            for k in ["equity", "totalAccountValue", "availableBalance",
-                                       "freeCollateral", "totalMarginUsed"]:
-                                if k in a:
-                                    print(f"    {k}: {a[k]}")
-        else:
-            print(f"  Response: {j}")
+async def funding(client):
+    """Funding rates for all available symbols + extreme funding scanner."""
+    print("=" * 80)
+    print("  Apex Omni — FUNDING RATES")
+    print("=" * 80)
 
-        # Also try v2 account for richer data
-        r2 = auth_get(c, "/api/v2/account")
-        j2 = r2.json()
-        if j2.get("data") and j2.get("code") not in [20016, "20016"]:
-            data2 = j2["data"]
-            print(f"\n  V2 Account (USDC):")
-            for sub in ["account", "wallets"]:
-                if sub in data2 and isinstance(data2[sub], dict):
-                    for k in ["equity", "totalAccountValue", "availableBalance",
-                               "freeCollateral", "totalMarginUsed"]:
-                        if k in data2[sub]:
-                            print(f"    {k}: {data2[sub][k]}")
+    # Gather tickers for all known symbols
+    symbols = [
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "DOGEUSDT", "SUIUSDT",
+        "LINKUSDT", "ARBUSDT", "AVAXUSDT", "WIFUSDT", "NEARUSDT",
+        "AAVEUSDT", "XRPUSDT", "BNBUSDT", "TONUSDT", "ADAUSDT",
+        "MATICUSDT", "OPUSDT", "APTUSDT", "TRXUSDT", "LTCUSDT",
+        "DOTUSDT", "SEIUSDT", "PEPEUSDT", "ONDOUSDT", "HYPEUSDT",
+        "JUPUSDT", "ORDIUSDT", "TIAUSDT", "STXUSDT", "MKRUSDT",
+    ]
+    assets = []
+    for sym in symbols:
+        try:
+            resp = await client.get(f"{BASE}/api/v3/ticker", params={"symbol": sym})
+            items = resp.json().get("data", [])
+            if items and isinstance(items, list) and items[0]:
+                d = items[0]
+                rate = float(d.get("fundingRate") or 0)
+                pred = float(d.get("predictedFundingRate") or 0)
+                last = float(d.get("lastPrice") or 0)
+                hi = float(d.get("highPrice24h") or 0)
+                lo = float(d.get("lowPrice24h") or 0)
+                oi = float(d.get("openInterest") or 0)
+                chg = float(d.get("price24hPcnt") or 0)
+                idx = float(d.get("indexPrice") or 0)
+                next_t = d.get("nextFundingTime", "")
+                ann = rate * (8760 / 8)  # 8h cycle → annualized
+                oi_usd = oi * last
+                assets.append({
+                    "symbol": sym, "rate": rate, "predicted": pred,
+                    "annualized": ann, "last": last, "hi": hi, "lo": lo,
+                    "oi": oi, "oi_usd": oi_usd, "chg": chg, "index": idx,
+                    "next_funding": next_t,
+                })
+        except Exception:
+            pass
 
-        # Account balance
-        print("\n  ACCOUNT BALANCE")
-        print("-" * 70)
-        r = auth_get(c, "/api/v3/account-balance")
-        j = r.json()
-        if j.get("data"):
-            data = j["data"]
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    if isinstance(v, (str, int, float)):
-                        print(f"  {k}: {v}")
-                    elif isinstance(v, list):
-                        print(f"  {k}: ({len(v)} items)")
-                        for item in v[:5]:
-                            if isinstance(item, dict):
-                                print(f"    {item}")
-                            else:
-                                print(f"    {item}")
+    # Sort by OI (proxy for importance since we don't have 24h volume here)
+    by_oi = sorted(assets, key=lambda a: a["oi_usd"], reverse=True)
+
+    print(f"\n  {'SYMBOL':<12} {'RATE/8H':>12} {'ANNUAL':>8} {'PREDICTED':>12} "
+          f"{'LAST':>12} {'24H CHG':>8} {'OI (USD)':>14}")
+    print("  " + "-" * 85)
+    for a in by_oi:
+        print(f"  {a['symbol']:<12} {a['rate']*100:>11.6f}% {a['annualized']*100:>+7.2f}% "
+              f"{a['predicted']*100:>11.6f}% ${a['last']:>11,.2f} "
+              f"{a['chg']*100:>+7.2f}% ${a['oi_usd']:>13,.0f}")
+
+    if assets:
+        next_t = assets[0].get("next_funding", "")
+        if next_t:
+            print(f"\n  Next funding: {next_t}")
+
+    # Extreme funding
+    by_rate = sorted(assets, key=lambda a: a["annualized"], reverse=True)
+    print(f"\n  EXTREME FUNDING (top 5 highest + top 5 most negative)")
+    print(f"  {'SYMBOL':<12} {'ANNUAL':>8} {'LAST':>12} {'OI (USD)':>14}")
+    print("  " + "-" * 50)
+    print("  -- HIGHEST --")
+    for a in by_rate[:5]:
+        print(f"  {a['symbol']:<12} {a['annualized']*100:>+7.2f}% "
+              f"${a['last']:>11,.2f} ${a['oi_usd']:>13,.0f}")
+    print("  -- MOST NEGATIVE --")
+    for a in by_rate[-5:]:
+        print(f"  {a['symbol']:<12} {a['annualized']*100:>+7.2f}% "
+              f"${a['last']:>11,.2f} ${a['oi_usd']:>13,.0f}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# AUTHENTICATED
+# ═══════════════════════════════════════════════════════════════
+
+async def account(client):
+    """Account balance and margin info."""
+    print("=" * 80)
+    print("  Apex Omni — ACCOUNT BALANCE")
+    print("=" * 80)
+
+    # V3 account (identity + l2Key)
+    resp = await auth_get(client, "/api/v3/account")
+    j = resp.json()
+    data = j.get("data", {})
+    if data:
+        print(f"\n  Account ID:    {data.get('id', 'N/A')}")
+        print(f"  Address:       {data.get('ethereumAddress', 'N/A')}")
+        print(f"  Maker Fee:     {data.get('makerFeeRate', 'N/A')}")
+        print(f"  Taker Fee:     {data.get('takerFeeRate', 'N/A')}")
+    else:
+        code = j.get("code", "")
+        msg = j.get("msg", "")
+        print(f"\n  Account endpoint: code={code} msg={msg}")
+
+    # V3 account-balance (the real numbers)
+    resp2 = await auth_get(client, "/api/v3/account-balance")
+    j2 = resp2.json()
+    bal = j2.get("data", {})
+    if bal and isinstance(bal, dict) and j2.get("code") is None:
+        print(f"\n  {'METRIC':<30s} {'VALUE':>16s}")
+        print("  " + "-" * 48)
+        fields = [
+            ("Total Equity", "totalEquityValue"),
+            ("Available Balance", "availableBalance"),
+            ("Total Available", "totalAvailableBalance"),
+            ("Wallet Balance", "walletBalance"),
+            ("Initial Margin", "initialMargin"),
+            ("Maintenance Margin", "maintenanceMargin"),
+            ("Unrealized PnL", "unrealizedPnl"),
+            ("Realized PnL", "realizedPnl"),
+            ("Total Risk", "totalRisk"),
+            ("Liabilities", "liabilities"),
+        ]
+        for label, key in fields:
+            val = bal.get(key, "")
+            if val == "" or val is None:
+                continue
+            try:
+                print(f"  {label:<30s} ${float(val):>15,.2f}")
+            except (ValueError, TypeError):
+                print(f"  {label:<30s} {val:>16s}")
+    else:
+        code = j2.get("code", "")
+        msg = j2.get("msg", "")
+        if code:
+            print(f"\n  Balance endpoint: code={code} msg={msg}")
+
+
+async def positions(client):
+    """Open positions from account data."""
+    print("=" * 80)
+    print("  Apex Omni — OPEN POSITIONS")
+    print("=" * 80)
+
+    # The V3 account endpoint includes openPositions in the nested account
+    resp = await auth_get(client, "/api/v3/account")
+    j = resp.json()
+    data = j.get("data", {})
+
+    acct = data.get("account", data.get("accounts", {}))
+    open_pos = {}
+    if isinstance(acct, dict):
+        open_pos = acct.get("openPositions", {})
+    elif isinstance(acct, list) and acct:
+        open_pos = acct[0].get("openPositions", {})
+
+    if not open_pos:
+        # Try V3 account-balance which may have position-level data
+        resp2 = await auth_get(client, "/api/v3/account-balance")
+        j2 = resp2.json()
+        bal = j2.get("data", {})
+        # Check if there's a positions array
+        if isinstance(bal, dict):
+            pos_list = bal.get("positions", bal.get("openPositions", []))
+            if isinstance(pos_list, list) and pos_list:
+                print(f"\n  {'SYMBOL':<14} {'SIDE':<6} {'SIZE':>10} {'ENTRY':>12} "
+                      f"{'uPnL':>12} {'LIQ':>12}")
+                print("  " + "-" * 70)
+                total_upnl = 0
+                for p in pos_list:
+                    sym = p.get("symbol", "?")
+                    side = p.get("side", "?")
+                    size = p.get("size", p.get("qty", "0"))
+                    entry = p.get("entryPrice", p.get("avgEntryPrice", "?"))
+                    upnl = float(p.get("unrealizedPnl", 0))
+                    liq = p.get("liquidationPrice", p.get("liqPrice", "N/A"))
+                    total_upnl += upnl
+                    print(f"  {sym:<14} {side:<6} {size:>10} ${float(entry):>11,.2f} "
+                          f"${upnl:>+11,.2f} {liq:>12}")
+                print(f"\n  Total uPnL: ${total_upnl:+,.2f}")
+                return
+
+        print("\n  No open positions")
+        return
+
+    if isinstance(open_pos, dict) and open_pos:
+        print(f"\n  {'SYMBOL':<14} {'SIDE':<6} {'SIZE':>10} {'ENTRY':>12} "
+              f"{'uPnL':>12} {'LIQ':>12}")
+        print("  " + "-" * 70)
+        total_upnl = 0
+        for sym, pos in open_pos.items():
+            side = pos.get("side", "?")
+            size = pos.get("size", "0")
+            entry = pos.get("entryPrice", "?")
+            upnl = float(pos.get("unrealizedPnl", 0))
+            liq = pos.get("liquidationPrice", "N/A")
+            total_upnl += upnl
+            print(f"  {sym:<14} {side:<6} {size:>10} ${float(entry):>11,.2f} "
+                  f"${upnl:>+11,.2f} {liq:>12}")
+        print(f"\n  Total uPnL: ${total_upnl:+,.2f}")
+    else:
+        print("\n  No open positions")
+
+
+async def orders(client):
+    """Open orders."""
+    print("=" * 80)
+    print("  Apex Omni — OPEN ORDERS")
+    print("=" * 80)
+
+    resp = await auth_get(client, "/api/v3/open-orders")
+    j = resp.json()
+    data = j.get("data", [])
+    order_list = data.get("orders", data) if isinstance(data, dict) else data
+
+    if not order_list or (isinstance(order_list, list) and len(order_list) == 0):
+        print("\n  No open orders")
+        return
+
+    print(f"\n  {'SYMBOL':<14} {'SIDE':<6} {'TYPE':<10} {'PRICE':>12} "
+          f"{'SIZE':>10} {'FILLED':>10} {'STATUS':<12}")
+    print("  " + "-" * 80)
+    for o in order_list:
+        sym = o.get("symbol", "?")
+        side = o.get("side", "?")
+        otype = o.get("orderType", o.get("type", "?"))
+        price = o.get("price", "?")
+        size = o.get("size", "?")
+        filled = o.get("filledSize", o.get("cumMatchFillSize", "0"))
+        status = o.get("status", "?")
+        print(f"  {sym:<14} {side:<6} {otype:<10} ${float(price):>11,.2f} "
+              f"{size:>10} {filled:>10} {status:<12}")
+
+
+async def fills(client):
+    """Recent trade fills."""
+    print("=" * 80)
+    print("  Apex Omni — RECENT FILLS (last 20)")
+    print("=" * 80)
+
+    resp = await auth_get(client, "/api/v3/fills", {"limit": "20"})
+    j = resp.json()
+    data = j.get("data", {})
+    fill_list = data.get("orders", data) if isinstance(data, dict) else data
+
+    if isinstance(fill_list, list) and len(fill_list) == 0:
+        print("\n  No recent fills")
+        return
+
+    if isinstance(fill_list, list):
+        print(f"\n  {'TIME':>20} {'SYMBOL':<14} {'SIDE':<6} {'TYPE':<8} "
+              f"{'PRICE':>12} {'SIZE':>10} {'FEE':>10} {'DIR':<6}")
+        print("  " + "-" * 90)
+        for f in fill_list:
+            sym = f.get("symbol", "?")
+            side = f.get("side", "?")
+            price = f.get("price", "?")
+            size = f.get("size", "?")
+            fee = f.get("fee", "?")
+            direction = f.get("direction", "?")
+            otype = f.get("orderType", "?")
+            created = ts(f.get("createdAt", 0))
+            try:
+                fee_str = f"${float(fee):>9,.4f}"
+            except (ValueError, TypeError):
+                fee_str = f"{fee:>10}"
+            print(f"  {created:>20} {sym:<14} {side:<6} {otype:<8} "
+                  f"${float(price):>11,.2f} {size:>10} {fee_str} {direction:<6}")
+
+        # Total fees
+        total_fees = sum(float(f.get("fee", 0)) for f in fill_list)
+        print(f"\n  Total fees (shown): ${total_fees:,.4f}")
+    else:
+        print(f"\n  {fill_list}")
+
+
+async def history(client):
+    """Order history."""
+    print("=" * 80)
+    print("  Apex Omni — ORDER HISTORY (last 20)")
+    print("=" * 80)
+
+    resp = await auth_get(client, "/api/v3/history-orders", {"limit": "20"})
+    j = resp.json()
+    data = j.get("data", {})
+    order_list = data.get("orders", data) if isinstance(data, dict) else data
+
+    if isinstance(order_list, list) and len(order_list) == 0:
+        print("\n  No order history")
+        return
+
+    if isinstance(order_list, list):
+        print(f"\n  {'TIME':>20} {'SYMBOL':<14} {'SIDE':<6} {'TYPE':<10} "
+              f"{'STATUS':<12} {'PRICE':>12} {'SIZE':>10}")
+        print("  " + "-" * 90)
+        for o in order_list:
+            sym = o.get("symbol", "?")
+            side = o.get("side", "?")
+            otype = o.get("orderType", o.get("type", "?"))
+            status = o.get("status", "?")
+            price = o.get("price", "?")
+            size = o.get("size", "?")
+            created = ts(o.get("createdAt", 0))
+            print(f"  {created:>20} {sym:<14} {side:<6} {otype:<10} "
+                  f"{status:<12} ${float(price):>11,.2f} {size:>10}")
+    else:
+        print(f"\n  {order_list}")
+
+
+async def pnl(client):
+    """Historical PnL (closed positions)."""
+    print("=" * 80)
+    print("  Apex Omni — HISTORICAL PnL (last 20)")
+    print("=" * 80)
+
+    resp = await auth_get(client, "/api/v3/historical-pnl", {"limit": "20"})
+    j = resp.json()
+    data = j.get("data", {})
+    pnl_list = data.get("historicalPnl", data) if isinstance(data, dict) else data
+
+    if isinstance(pnl_list, list) and len(pnl_list) == 0:
+        print("\n  No PnL history")
+        return
+
+    if isinstance(pnl_list, list):
+        print(f"\n  {'TIME':>20} {'SYMBOL':<14} {'SIDE':<6} {'SIZE':>10} "
+              f"{'ENTRY':>12} {'EXIT':>12} {'TOTAL PnL':>12}")
+        print("  " + "-" * 92)
+        total_pnl = 0
+        total_fees = 0
+        for p in pnl_list:
+            sym = p.get("symbol", "?")
+            side = p.get("side", "?")
+            size = p.get("size", "?")
+            entry = p.get("price", "?")
+            exit_p = p.get("exitPrice", "?")
+            pnl_val = float(p.get("totalPnl", 0))
+            fee = float(p.get("fee", 0))
+            created = ts(p.get("createdAt", 0))
+            total_pnl += pnl_val
+            total_fees += fee
+            print(f"  {created:>20} {sym:<14} {side:<6} {size:>10} "
+                  f"${float(entry):>11,.2f} ${float(exit_p):>11,.2f} ${pnl_val:>+11,.4f}")
+
+        print(f"\n  Net PnL (shown):  ${total_pnl:+,.4f}")
+        print(f"  Total fees:       ${total_fees:,.4f}")
+    else:
+        print(f"\n  {pnl_list}")
+
+
+async def income(client):
+    """Funding payments received/paid on positions."""
+    print("=" * 80)
+    print("  Apex Omni — FUNDING PAYMENTS")
+    print("=" * 80)
+
+    resp = await auth_get(client, "/api/v3/funding", {"limit": "50"})
+    j = resp.json()
+    data = j.get("data", {})
+    funding_list = data.get("fundingValues", data) if isinstance(data, dict) else data
+
+    if isinstance(funding_list, list) and funding_list:
+        print(f"\n  {'TIME':>20} {'SYMBOL':<14} {'SIDE':<6} {'SIZE':>10} "
+              f"{'RATE':>14} {'PAYMENT':>12}")
+        print("  " + "-" * 82)
+        total_payment = 0
+        by_symbol = {}
+        for f in funding_list:
+            sym = f.get("symbol", "?")
+            side = f.get("side", "?")
+            size = f.get("positionSize", "?")
+            rate = f.get("rate", "?")
+            payment = float(f.get("fundingValue", 0))
+            created = ts(f.get("fundingTime", 0))
+            total_payment += payment
+            by_symbol[sym] = by_symbol.get(sym, 0) + payment
+            try:
+                rate_str = f"{float(rate)*100:>13.6f}%"
+            except (ValueError, TypeError):
+                rate_str = f"{rate:>14}"
+            print(f"  {created:>20} {sym:<14} {side:<6} {size:>10} "
+                  f"{rate_str} ${payment:>+11,.4f}")
+
+        print(f"\n  Net funding received: ${total_payment:+,.4f}")
+        if len(by_symbol) > 1:
+            print(f"  By symbol:")
+            for sym, val in sorted(by_symbol.items(), key=lambda x: x[1]):
+                print(f"    {sym:<14} ${val:+,.4f}")
+    elif isinstance(funding_list, list):
+        print("\n  No funding payments")
+    else:
+        code = j.get("code", "")
+        msg = j.get("msg", "")
+        print(f"\n  Funding endpoint: code={code} msg={msg}")
+
+    # Also show funding rate history for major symbols (public)
+    print(f"\n  RECENT FUNDING RATE HISTORY (public)")
+    print("  " + "-" * 70)
+    for sym in ["BTC-USDT", "ETH-USDT", "SOL-USDT"]:
+        try:
+            resp = await client.get(
+                f"{BASE}/api/v3/history-funding",
+                params={"symbol": sym, "limit": "5"},
+            )
+            hdata = resp.json().get("data", {})
+            entries = hdata.get("historyFunds", [])
+            if entries:
+                print(f"\n  {sym}:")
+                for e in entries:
+                    rate = float(e.get("rate", 0))
+                    price = e.get("price", "?")
+                    ftime = ts(e.get("fundingTime", 0))
+                    ann = rate * 1095 * 100
+                    print(f"    {ftime}  Rate: {rate*100:>11.6f}%  Ann: {ann:>+7.2f}%  Price: ${float(price):>11,.2f}")
+        except Exception:
+            pass
+
+
+# ═══════════════════════════════════════════════════════════════
+# DISPATCH
+# ═══════════════════════════════════════════════════════════════
+
+PUBLIC_SECTIONS = {"funding": funding}
+AUTH_SECTIONS = {
+    "account": account,
+    "positions": positions,
+    "orders": orders,
+    "fills": fills,
+    "history": history,
+    "pnl": pnl,
+    "income": income,
+}
+ALL_SECTIONS = {**PUBLIC_SECTIONS, **AUTH_SECTIONS}
+
+
+async def main():
+    arg = sys.argv[1].lower().strip() if len(sys.argv) > 1 else "all"
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        if arg == "all":
+            await funding(client)
+            print()
+            if HAS_AUTH:
+                for name, fn in AUTH_SECTIONS.items():
+                    try:
+                        await fn(client)
+                    except Exception as e:
+                        print(f"\n  {name}: Error — {e}")
+                    print()
             else:
-                print(f"  {data}")
+                print("  [Auth sections skipped — set APEX_OMNI_API_KEY, "
+                      "APEX_OMNI_API_SECRET, APEX_OMNI_PASSPHRASE in .env]")
+        elif arg in PUBLIC_SECTIONS:
+            await PUBLIC_SECTIONS[arg](client)
+        elif arg in AUTH_SECTIONS:
+            if not HAS_AUTH:
+                print(f"ERROR: {arg} requires APEX_OMNI_API_KEY, "
+                      "APEX_OMNI_API_SECRET, APEX_OMNI_PASSPHRASE in .env")
+                sys.exit(1)
+            await AUTH_SECTIONS[arg](client)
         else:
-            print(f"  Response: {j}")
-
-        # Open orders
-        print("\n  OPEN ORDERS")
-        print("-" * 70)
-        r = auth_get(c, "/api/v3/open-orders")
-        j = r.json()
-        if j.get("data"):
-            orders = j["data"].get("orders", j["data"]) if isinstance(j["data"], dict) else j["data"]
-            if isinstance(orders, list):
-                if not orders:
-                    print("  No open orders")
-                for o in orders:
-                    sym = o.get("symbol", "?")
-                    side = o.get("side", "?")
-                    price = o.get("price", "?")
-                    size = o.get("size", "?")
-                    otype = o.get("type", "?")
-                    print(f"  {sym:<14} {side:<6} {otype:<10} Price: {price:>12}  Size: {size:>10}")
-            else:
-                print(f"  {orders}")
-        else:
-            print(f"  Response: {j}")
-
-        # Fills
-        print("\n  RECENT FILLS")
-        print("-" * 70)
-        r = auth_get(c, "/api/v3/fills", {"limit": "10"})
-        j = r.json()
-        if j.get("data"):
-            fills = j["data"].get("fills", j["data"]) if isinstance(j["data"], dict) else j["data"]
-            if isinstance(fills, list):
-                if not fills:
-                    print("  No recent fills")
-                for f in fills:
-                    sym = f.get("symbol", "?")
-                    side = f.get("side", "?")
-                    price = f.get("price", "?")
-                    size = f.get("size", "?")
-                    fee = f.get("fee", "?")
-                    ts = f.get("createdAt", "?")
-                    print(f"  {sym:<14} {side:<6} Price: {price:>12}  Size: {size:>10}  Fee: {fee:>8}  {ts}")
-            else:
-                print(f"  {fills}")
-        else:
-            print(f"  Response: {j}")
-
-        # Funding payments
-        print("\n  FUNDING PAYMENTS")
-        print("-" * 70)
-        r = auth_get(c, "/api/v3/funding", {"limit": "10", "symbol": "BTC-USDT", "side": "ALL"})
-        j = r.json()
-        if j.get("data"):
-            data = j["data"]
-            funding = data.get("fundingValues", data) if isinstance(data, dict) else data
-            if isinstance(funding, list):
-                if not funding:
-                    print("  No funding payments")
-                for f in funding:
-                    sym = f.get("symbol", "?")
-                    rate = f.get("rate", f.get("fundingRate", "?"))
-                    pay = f.get("payment", f.get("fundingValue", "?"))
-                    ts = f.get("effectiveAt", f.get("datetime", "?"))
-                    pos_size = f.get("positionSize", f.get("size", "?"))
-                    print(f"  {sym:<14} Rate: {rate:>14}  Payment: {pay:>12}  Size: {pos_size:>10}  {ts}")
-            else:
-                for k, v in data.items() if isinstance(data, dict) else []:
-                    print(f"  {k}: {v}")
-        else:
-            print(f"  Response: {j}")
-
-        # History orders
-        print("\n  ORDER HISTORY (last 5)")
-        print("-" * 70)
-        r = auth_get(c, "/api/v3/history-orders", {"limit": "5"})
-        j = r.json()
-        if j.get("data"):
-            orders = j["data"].get("orders", j["data"]) if isinstance(j["data"], dict) else j["data"]
-            if isinstance(orders, list):
-                if not orders:
-                    print("  No order history")
-                for o in orders:
-                    sym = o.get("symbol", "?")
-                    side = o.get("side", "?")
-                    price = o.get("price", "?")
-                    size = o.get("size", "?")
-                    status = o.get("status", "?")
-                    otype = o.get("type", "?")
-                    ts = o.get("createdAt", "?")
-                    print(f"  {sym:<14} {side:<6} {otype:<10} {status:<12} "
-                          f"Price: {price:>12}  Size: {size:>10}  {ts}")
-            else:
-                print(f"  {orders}")
-        else:
-            print(f"  Response: {j}")
-
-        # Historical PnL
-        print("\n  HISTORICAL PnL")
-        print("-" * 70)
-        r = auth_get(c, "/api/v3/historical-pnl", {"limit": "5"})
-        j = r.json()
-        if j.get("data"):
-            data = j["data"]
-            if isinstance(data, dict):
-                pnls = data.get("historicalPnl", data.get("pnlList", []))
-                if isinstance(pnls, list):
-                    if not pnls:
-                        print("  No PnL history")
-                    for p in pnls:
-                        print(f"  {p}")
-                else:
-                    for k, v in data.items():
-                        print(f"  {k}: {v}")
-            else:
-                print(f"  {data}")
-        else:
-            print(f"  Response: {j}")
-
-        # Transfers
-        print("\n  TRANSFERS (deposits/withdrawals)")
-        print("-" * 70)
-        r = auth_get(c, "/api/v3/transfers", {"limit": "5"})
-        j = r.json()
-        if j.get("data"):
-            data = j["data"]
-            transfers = data.get("transfers", data) if isinstance(data, dict) else data
-            if isinstance(transfers, list):
-                if not transfers:
-                    print("  No transfers")
-                for t in transfers:
-                    ttype = t.get("type", t.get("transferType", "?"))
-                    amt = t.get("creditAmount", t.get("amount", "?"))
-                    asset = t.get("creditAsset", t.get("asset", "?"))
-                    status = t.get("status", "?")
-                    ts = t.get("createdAt", t.get("updatedAt", "?"))
-                    print(f"  {ttype:<12} {amt:>14} {asset:<6} Status: {status:<12} {ts}")
-            elif isinstance(transfers, dict):
-                for k, v in transfers.items():
-                    print(f"  {k}: {v}")
-        else:
-            print(f"  Response: {j}")
-
-        print("\n" + "=" * 70)
-        print("  Done.")
+            print(f"Unknown section: {arg}")
+            print(f"Valid options: {', '.join(ALL_SECTIONS.keys())}, all")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

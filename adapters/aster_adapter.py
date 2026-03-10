@@ -82,9 +82,9 @@ EIP712_TYPES = {
 RATE_LIMIT_WEIGHT_PER_MIN = 2400
 RATE_LIMIT_ORDERS_PER_MIN = 1200
 
-# Funding cycle
-FUNDING_CYCLE_HOURS = 8
-FUNDING_PAYMENTS_PER_YEAR = 365 * (24 / FUNDING_CYCLE_HOURS)  # 1095
+# Funding cycles — Aster uses 1h, 4h, or 8h depending on the symbol.
+# Default to 8h (majors). Detected per-symbol via nextFundingTime spacing.
+FUNDING_CYCLE_HOURS_DEFAULT = 8
 
 # User data stream keepalive interval (listenKey expires after 60 min)
 LISTEN_KEY_KEEPALIVE_SEC = 1800  # 30 min recommended
@@ -368,7 +368,8 @@ class AsterAdapter(BaseDefiAdapter):
           - nextFundingTime: next funding settlement timestamp (ms)
           - interestRate: interest rate component
 
-        Note: Aster uses 8h funding cycle (1095 payments/year).
+        Note: Aster uses variable funding cycles per symbol (1h, 4h, or 8h).
+        Cycle is detected from funding history spacing.
         """
         vsymbol = self.normalize_symbol(symbol)
         resp = await self._client.get(
@@ -383,8 +384,9 @@ class AsterAdapter(BaseDefiAdapter):
         index_price = float(data.get("indexPrice", 0))
         next_ts = int(data.get("nextFundingTime", 0))
 
-        # Annualize: rate is per-period (8h), so multiply by payments/year
-        annualized = rate * FUNDING_PAYMENTS_PER_YEAR
+        cycle_hours = await self._detect_funding_cycle(vsymbol)
+        payments_per_year = 365 * (24 / cycle_hours)
+        annualized = rate * payments_per_year
 
         return FundingRate(
             venue="aster",
@@ -394,7 +396,7 @@ class AsterAdapter(BaseDefiAdapter):
             mark_price=mark,
             index_price=index_price,
             next_funding_ts=next_ts,
-            cycle_hours=FUNDING_CYCLE_HOURS,
+            cycle_hours=cycle_hours,
             predicted_rate=rate,  # Aster doesn't expose a separate predicted rate
             timestamp=datetime.now(timezone.utc),
         )
@@ -891,6 +893,42 @@ class AsterAdapter(BaseDefiAdapter):
     def _denormalize_symbol(self, venue_symbol: str) -> str:
         """Convert Aster symbol back to internal. BTCUSDT → BTC"""
         return venue_symbol.replace("USDT", "").replace("BUSD", "")
+
+    # ═══════════════════════════════════════════════════════════════
+    # Funding cycle detection
+    # ═══════════════════════════════════════════════════════════════
+
+    _cycle_cache: dict[str, int] = {}  # symbol → cycle_hours
+
+    async def _detect_funding_cycle(self, venue_symbol: str) -> int:
+        """
+        Detect funding cycle (1h, 4h, or 8h) for a symbol by checking
+        the spacing between the two most recent funding rate entries.
+        Results are cached for the lifetime of the adapter.
+        """
+        if venue_symbol in self._cycle_cache:
+            return self._cycle_cache[venue_symbol]
+
+        try:
+            resp = await self._client.get(
+                "/fapi/v1/fundingRate",
+                params={"symbol": venue_symbol, "limit": 2},
+            )
+            resp.raise_for_status()
+            history = resp.json()
+            if len(history) >= 2:
+                t0 = int(history[0]["fundingTime"])
+                t1 = int(history[1]["fundingTime"])
+                diff_hours = round((t1 - t0) / (1000 * 3600))
+                if diff_hours in (1, 4, 8):
+                    self._cycle_cache[venue_symbol] = diff_hours
+                    return diff_hours
+        except Exception as e:
+            logger.debug("aster.cycle_detect_failed",
+                         symbol=venue_symbol, error=str(e))
+
+        self._cycle_cache[venue_symbol] = FUNDING_CYCLE_HOURS_DEFAULT
+        return FUNDING_CYCLE_HOURS_DEFAULT
 
     # ═══════════════════════════════════════════════════════════════
     # Helpers
