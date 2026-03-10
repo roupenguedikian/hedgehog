@@ -66,18 +66,19 @@ venues:
     chain_type: evm
     settlement_chain: bnb_chain
     funding_cycle_hours: 8
-    maker_fee_bps: 2.0
-    taker_fee_bps: 5.0
+    maker_fee_bps: 1.0            # official: 0.01% (was 2.0)
+    taker_fee_bps: 3.5            # official: 0.035% (was 5.0)
     max_leverage: 200
     collateral_token: USDT
     api_base_url: https://fapi.asterdex.com
     ws_url: wss://fstream.asterdex.com/ws
+    ws_combined_url: wss://fstream.asterdex.com/stream
     deposit_chain: bnb
     tier: tier_2
     zero_gas: true
     has_escape_hatch: false
-    has_privacy: true             # Hidden orders
-    has_anti_mev: true            # MEV-resistant
+    has_privacy: true             # Hidden orders (V3 only)
+    has_anti_mev: true            # MEV-resistant via hidden orders
     yield_bearing_collateral: false
     symbol_format: "{symbol}USDT"
 

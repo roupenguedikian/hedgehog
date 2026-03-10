@@ -1,0 +1,31 @@
+# ═══════════════════════════════════════════════════════════════════
+# Aster DEX Credentials — add to .env.example and .env
+# ═══════════════════════════════════════════════════════════════════
+#
+# Aster supports TWO auth modes. Configure ONE set:
+#
+# OPTION A: V1 (HMAC) — Traditional API key/secret
+#   Create at: https://www.asterdex.com/en/api-management
+#   1. Connect wallet  2. Click "Create API"  3. Copy key + secret
+#   Secret is only shown ONCE at creation time.
+#
+# OPTION B: V3 (EIP-712) — 3-address wallet system (recommended)
+#   Create at: https://www.asterdex.com/en/api-wallet
+#   user    = your main login wallet address
+#   signer  = the API wallet address Aster generates
+#   key     = the API wallet's private key
+#   Supports hidden orders and newer /fapi/v3/ endpoints.
+#
+# ═══════════════════════════════════════════════════════════════════
+
+# Option A: V1 HMAC auth
+ASTER_API_KEY=
+ASTER_API_SECRET=
+
+# Option B: V3 EIP-712 auth (preferred for new setups)
+ASTER_USER_ADDRESS=          # Main wallet address (0x...)
+ASTER_SIGNER_ADDRESS=        # API wallet address (0x...)
+ASTER_SIGNER_PRIVATE_KEY=    # API wallet private key (no 0x prefix)
+
+# Auth mode selection: "v1" or "v3" (auto-detected if left empty)
+ASTER_AUTH_MODE=

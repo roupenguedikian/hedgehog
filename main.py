@@ -85,8 +85,9 @@ def build_venue_configs(venues_yaml: dict) -> dict:
 def build_adapters(venue_configs: dict) -> dict:
     """Instantiate adapters for all configured venues."""
     from adapters.hyperliquid_adapter import HyperliquidAdapter
+    from adapters.aster_adapter import AsterAdapter
     from adapters.generic_rest_adapter import (
-        GenericRestAdapter, AsterAdapter, LighterAdapter, EtherealAdapter, ApexAdapter,
+        GenericRestAdapter, LighterAdapter, EtherealAdapter, ApexAdapter,
     )
 
     ADAPTER_MAP = {
@@ -115,7 +116,20 @@ async def connect_adapters(adapters: dict, venue_configs: dict) -> dict:
     for name, adapter in adapters.items():
         # Look for venue-specific key first, then fallback to generic
         pk = os.getenv(f"{name.upper()}_PRIVATE_KEY", os.getenv("EVM_PRIVATE_KEY", ""))
-        if not pk:
+
+        # Build venue-specific kwargs
+        connect_kwargs = {}
+        if name == "aster":
+            # Aster supports V1 (HMAC) and V3 (EIP-712) auth
+            connect_kwargs["api_key"] = os.getenv("ASTER_API_KEY", "")
+            connect_kwargs["api_secret"] = os.getenv("ASTER_API_SECRET", "")
+            connect_kwargs["user"] = os.getenv("ASTER_USER_ADDRESS", "")
+            connect_kwargs["signer"] = os.getenv("ASTER_SIGNER_ADDRESS", "")
+            # V3 uses signer private key
+            if not pk:
+                pk = os.getenv("ASTER_SIGNER_PRIVATE_KEY", "")
+
+        if not pk and not any(connect_kwargs.values()):
             logger.info(f"No private key for {name} — running in read-only mode")
             # Still connect for data access (most venues allow public data without auth)
             try:
@@ -126,7 +140,7 @@ async def connect_adapters(adapters: dict, venue_configs: dict) -> dict:
             continue
 
         try:
-            success = await adapter.connect(pk)
+            success = await adapter.connect(pk, **connect_kwargs)
             if success:
                 connected[name] = adapter
                 logger.info(f"Connected: {name}")

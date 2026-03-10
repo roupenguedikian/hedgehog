@@ -135,11 +135,6 @@ class GenericRestAdapter(BaseDefiAdapter):
         return {"available": 0, "total": 0, "margin_used": 0}
 
 
-class AsterAdapter(GenericRestAdapter):
-    """Aster — Binance-compatible API with EVM wallet signing."""
-    pass  # Binance-compatible endpoints work out of the box
-
-
 class LighterAdapter(GenericRestAdapter):
     """Lighter — ZK-rollup with custom REST API."""
     def _funding_endpoint(self, symbol: str) -> str:
