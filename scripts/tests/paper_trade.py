@@ -633,9 +633,9 @@ async def run_cycle(state: dict):
 
     prev_ts, prev_state = load_ema(tag="paper")
     dt = now_ts - prev_ts if prev_ts > 0 else 0
-    state_ema = update_ema(current_apy, prev_state, dt, now_ts)
-    save_ema(now_ts, state_ema, tag="paper")
-    ema = ema_values(state_ema)
+    state = update_ema(current_apy, prev_state, dt, now_ts)
+    save_ema(now_ts, state, tag="paper")
+    ema = ema_values(state)
 
     # 3. Sample rates and settle funding
     if elapsed_hours > 0 and state["positions"]:

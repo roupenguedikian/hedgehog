@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RHGBot Trading Terminal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- ── Top Bar ── -->
+  <header id="topbar" class="topbar">
+    <div class="topbar-left">
+      <span class="brand">RHGBot</span>
+      <span id="statePill" class="state-pill">
+        <span class="state-dot"></span>
+        <span class="state-text">connecting</span>
+      </span>
+    </div>
+    <div id="topbarMetrics" class="topbar-metrics">
+      <div class="metric">
+        <span class="metric-label">Positions</span>
+        <span id="metricPositions" class="metric-value">--</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Balance</span>
+        <span id="metricBalance" class="metric-value">--</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Used</span>
+        <span id="metricUsed" class="metric-value">--</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Leverage</span>
+        <span id="metricLeverage" class="metric-value">--</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">aDPY / APY</span>
+        <span id="metricAdpy" class="metric-value">--</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Net Pay/hr</span>
+        <span id="metricPayHr" class="metric-value">--</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">uPnL</span>
+        <span id="metricUpnl" class="metric-value">--</span>
+      </div>
+    </div>
+    <div class="topbar-controls">
+      <button id="btnStart" class="btn btn-start" onclick="runtimeAction('start')">Start</button>
+      <button id="btnPause" class="btn" onclick="runtimeAction('pause')">Pause</button>
+      <button id="btnResume" class="btn" onclick="runtimeAction('resume')">Resume</button>
+      <button id="btnRestart" class="btn" onclick="runtimeAction('restart')">Restart</button>
+      <button id="btnStop" class="btn btn-stop" onclick="handleStop()">Stop</button>
+    </div>
+  </header>
+
+  <!-- ── Main Grid: Positions + Activity ── -->
+  <div class="main-grid">
+    <section id="positionsPanel" class="panel positions-panel">
+      <div class="panel-header">
+        <h2>Positions</h2>
+        <span id="positionCount" class="panel-badge">0</span>
+      </div>
+      <div id="portfolioSummary" class="portfolio-summary"></div>
+      <div id="positionsTable" class="positions-table"></div>
+    </section>
+
+    <aside id="activityPanel" class="panel activity-panel">
+      <div class="panel-header">
+        <h2>Activity</h2>
+      </div>
+      <div id="activityFilters" class="activity-filters">
+        <button class="filter-btn active" data-cat="all">All</button>
+        <button class="filter-btn" data-cat="entry">Entry</button>
+        <button class="filter-btn" data-cat="hedge">Hedge</button>
+        <button class="filter-btn" data-cat="rotation">Rotation</button>
+        <button class="filter-btn" data-cat="exit">Exit</button>
+        <button class="filter-btn" data-cat="health">Health</button>
+      </div>
+      <div id="activityFeed" class="activity-feed"></div>
+    </aside>
+  </div>
+
+  <!-- ── Tab Bar ── -->
+  <nav id="tabBar" class="tab-bar">
+    <button class="tab active" data-tab="entry">Entry Board</button>
+    <button class="tab" data-tab="orders">Orders</button>
+    <button class="tab" data-tab="fills">Fills</button>
+    <button class="tab" data-tab="funding">Funding</button>
+    <button class="tab" data-tab="connectors">Connectors</button>
+    <button class="tab" data-tab="config">Config</button>
+  </nav>
+
+  <!-- ── Secondary Panel ── -->
+  <section id="secondaryPanel" class="panel secondary-panel">
+    <div id="tabContent"></div>
+  </section>
+
+  <!-- ── Auth Modal ── -->
+  <div id="authModal" class="modal" style="display:none">
+    <div class="modal-content">
+      <h3>Authentication</h3>
+      <p>Enter your WEB_UI_AUTH_TOKEN to connect.</p>
+      <input id="authTokenInput" type="password" placeholder="Bearer token" />
+      <div class="modal-actions">
+        <button class="btn btn-start" onclick="saveToken()">Connect</button>
+        <button class="btn" onclick="skipAuth()">Skip (no auth)</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

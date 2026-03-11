@@ -5,6 +5,7 @@ aiohttp>=3.9.0
 
 # Venue SDKs
 hyperliquid-python-sdk>=0.6.0
+ethereal-sdk>=0.1.2                # Ethereal (Converge/EVM)
 # driftpy>=0.7.0                   # Drift (Solana)
 # dydx-v4-client>=1.0.0           # dYdX v4 (Cosmos)
 # apexomni>=0.1.0                 # ApeX Omni

@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """
-Hyperliquid market (taker) order tool — used by the /hl-market Claude skill.
+trade.xyz (XYZ) HIP-3 market (taker) order tool — used by the /tradexyz-market Claude skill.
 
 Places an IOC limit order at an aggressive price to simulate a market order
-with slippage protection.
+with slippage protection. XYZ is a HIP-3 builder DEX on Hyperliquid — orders
+are placed via the HL SDK with `xyz:SYMBOL` coin names; data is fetched via
+the HL info API with `dex: "xyz"`.
 
 Usage:
-    python3 scripts/hl_market_order.py <symbol> <side> <size> [--slippage-bps N] [--reduce-only] [--dry-run]
+    python3 scripts/orders/tradexyz_market_order.py <symbol> <side> <size> [--slippage-bps N] [--reduce-only] [--dry-run]
 
 Examples:
-    python3 scripts/hl_market_order.py BTC long 0.001
-    python3 scripts/hl_market_order.py ETH short 0.5 --slippage-bps 20
-    python3 scripts/hl_market_order.py SOL long 10 --reduce-only
+    python3 scripts/orders/tradexyz_market_order.py NVDA long 10
+    python3 scripts/orders/tradexyz_market_order.py BTC short 0.001 --slippage-bps 20
+    python3 scripts/orders/tradexyz_market_order.py TSLA long 5 --reduce-only
 """
 import os
 import sys
+
+import httpx
 
 # ── Load .env ────────────────────────────────────────────────────────
 def load_env(path):
@@ -28,14 +32,26 @@ def load_env(path):
             k, v = line.split("=", 1)
             os.environ.setdefault(k.strip(), v.strip().strip('"'))
 
-load_env(os.path.join(os.path.dirname(__file__), "..", ".env"))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(os.path.dirname(_HERE))
+load_env(os.path.join(_ROOT, ".env"))
+
+API = "https://api.hyperliquid.xyz"
+XYZ_DEX = "xyz"
+
+
+def _post(payload: dict) -> dict | list:
+    """Synchronous POST to Hyperliquid info API."""
+    resp = httpx.post(f"{API}/info", json=payload, timeout=15.0)
+    resp.raise_for_status()
+    return resp.json()
 
 
 def parse_args(args):
     if len(args) < 3:
-        print("Usage: python3 scripts/hl_market_order.py <symbol> <side> <size> [options]")
+        print("Usage: python3 scripts/orders/tradexyz_market_order.py <symbol> <side> <size> [options]")
         print()
-        print("  symbol:          BTC, ETH, SOL, etc.")
+        print("  symbol:          NVDA, BTC, ETH, TSLA, etc. (bare symbols)")
         print("  side:            long/buy or short/sell")
         print("  size:            quantity in base asset")
         print()
@@ -91,51 +107,60 @@ def main():
 
     wallet = Account.from_key(pk)
     address = wallet.address
-    info = Info(base_url="https://api.hyperliquid.xyz", skip_ws=True)
-    exchange = Exchange(wallet, base_url="https://api.hyperliquid.xyz")
 
-    # Validate symbol
-    meta = info.meta()
-    asset_map = {u["name"]: i for i, u in enumerate(meta["universe"])}
-    sz_decimals = {}
-    for u in meta["universe"]:
-        sd = u.get("szDecimals", 3)
-        sz_decimals[u["name"]] = sd
+    # ── Fetch XYZ universe via dex-aware info API ──
+    meta = _post({"type": "metaAndAssetCtxs", "dex": XYZ_DEX})
+    universe = meta[0]["universe"]
+    ctxs = meta[1]
+
+    # Build symbol maps — coins are 'xyz:NVDA' format
+    asset_map = {}     # clean_name -> index
+    raw_names = {}     # clean_name -> 'xyz:NVDA'
+    sz_decimals = {}   # clean_name -> szDecimals
+    for i, u in enumerate(universe):
+        raw = u["name"]
+        clean = raw.split(":", 1)[1] if ":" in raw else raw
+        asset_map[clean] = i
+        raw_names[clean] = raw
+        sz_decimals[clean] = u.get("szDecimals", 3)
 
     if symbol not in asset_map:
-        print(f"ERROR: Symbol '{symbol}' not found on Hyperliquid")
-        print(f"  Available: {', '.join(sorted(asset_map.keys())[:20])}...")
+        print(f"ERROR: Symbol '{symbol}' not found on trade.xyz")
+        avail = sorted(asset_map.keys())
+        print(f"  Available: {', '.join(avail[:30])}{'...' if len(avail) > 30 else ''}")
         sys.exit(1)
 
-    # Get orderbook
-    ob = info.l2_snapshot(symbol)
-    bids = ob.get("levels", [[]])[0]
-    asks = ob.get("levels", [[]])[1] if len(ob.get("levels", [])) > 1 else []
+    coin = raw_names[symbol]  # e.g. 'xyz:NVDA'
+    idx = asset_map[symbol]
+    ctx = ctxs[idx]
+
+    # Market data from asset context
+    funding_rate = float(ctx.get("funding") or 0)
+    mark_price = float(ctx.get("markPx") or 0)
+    oracle_price = float(ctx.get("oraclePx") or 0)
+
+    # ── Get orderbook ──
+    ob = _post({"type": "l2Book", "coin": coin})
+    levels = ob.get("levels", [[], []])
+    bids = levels[0] if len(levels) > 0 else []
+    asks = levels[1] if len(levels) > 1 else []
 
     if not bids or not asks:
-        print("ERROR: Empty orderbook")
+        print("ERROR: Empty orderbook for", symbol)
         sys.exit(1)
 
     best_bid = float(bids[0]["px"])
     best_ask = float(asks[0]["px"])
     spread_bps = (best_ask - best_bid) / best_bid * 10000 if best_bid > 0 else 0
 
-    # Get funding rate from asset contexts
-    meta_ctxs = info.meta_and_asset_ctxs()
-    asset_ctxs = meta_ctxs[1]
-    idx = asset_map[symbol]
-    ctx = asset_ctxs[idx]
-    funding_rate = float(ctx.get("funding") or 0)
-    mark_price = float(ctx.get("markPx") or 0)
-
-    # Calculate aggressive price with slippage
+    # ── Calculate aggressive IOC price with slippage ──
     slippage_mult = slippage_bps / 10000
     if is_buy:
         aggressive_price = best_ask * (1 + slippage_mult)
     else:
         aggressive_price = best_bid * (1 - slippage_mult)
 
-    # Round to tick size
+    # Round to tick size (significant figures based on price magnitude)
     if aggressive_price > 1000:
         aggressive_price = round(aggressive_price, 2)
     elif aggressive_price > 1:
@@ -151,9 +176,9 @@ def main():
     side_label = "BUY/LONG" if is_buy else "SELL/SHORT"
 
     print("=" * 60)
-    print(f"  HYPERLIQUID MARKET ORDER {'(DRY RUN)' if dry_run else ''}")
+    print(f"  TRADE.XYZ MARKET ORDER {'(DRY RUN)' if dry_run else ''}")
     print("=" * 60)
-    print(f"\n  Symbol:        {symbol}")
+    print(f"\n  Symbol:        {symbol} ({coin})")
     print(f"  Side:          {side_label}")
     print(f"  Size:          {size}")
     print(f"  Slippage:      {slippage_bps} bps")
@@ -164,28 +189,36 @@ def main():
 
     print(f"\n  --- Market Context ---")
     print(f"  Mark Price:    ${mark_price:,.4f}")
+    print(f"  Oracle Price:  ${oracle_price:,.4f}")
     print(f"  Best Bid:      ${best_bid:,.4f}")
     print(f"  Best Ask:      ${best_ask:,.4f}")
     print(f"  Spread:        {spread_bps:.2f} bps")
     print(f"  Funding:       {funding_rate*100:.6f}%/hr ({funding_rate*8760*100:.2f}% ann)")
 
-    # Account balance
-    user = info.user_state(address)
-    cross = user.get("crossMarginSummary", {})
-    acct_value = float(cross.get("accountValue", 0))
-    margin_used = float(cross.get("totalMarginUsed", 0))
-    print(f"\n  --- Account ---")
-    print(f"  NAV:           ${acct_value:,.2f}")
-    print(f"  Free Margin:   ${acct_value - margin_used:,.2f}")
+    # ── Account balance (XYZ clearinghouse) ──
+    try:
+        user = _post({"type": "clearinghouseState", "user": address, "dex": XYZ_DEX})
+        cross = user.get("crossMarginSummary", {})
+        acct_value = float(cross.get("accountValue", 0))
+        margin_used = float(cross.get("totalMarginUsed", 0))
+        print(f"\n  --- Account (XYZ clearinghouse) ---")
+        print(f"  NAV:           ${acct_value:,.2f}")
+        print(f"  Free Margin:   ${acct_value - margin_used:,.2f}")
+    except Exception as e:
+        print(f"\n  --- Account ---")
+        print(f"  Error: {e}")
 
     if dry_run:
         print(f"\n  [DRY RUN] Order NOT placed. Remove --dry-run to execute.")
         return
 
-    # Place IOC order
+    # ── Place IOC order via HL SDK ──
     print(f"\n  Placing IOC order...")
+    info = Info(base_url=API, skip_ws=True)
+    exchange = Exchange(wallet, base_url=API)
+
     order_type = {"limit": {"tif": "Ioc"}}
-    result = exchange.order(symbol, is_buy, size, aggressive_price, order_type,
+    result = exchange.order(coin, is_buy, size, aggressive_price, order_type,
                             reduce_only=reduce_only)
 
     # Parse result
@@ -215,14 +248,17 @@ def main():
         print(f"  Error:         {result}")
         sys.exit(1)
 
-    # Updated balance
-    user2 = info.user_state(address)
-    cross2 = user2.get("crossMarginSummary", {})
-    new_acct = float(cross2.get("accountValue", 0))
-    new_margin = float(cross2.get("totalMarginUsed", 0))
-    print(f"\n  --- Updated Account ---")
-    print(f"  NAV:           ${new_acct:,.2f}")
-    print(f"  Free Margin:   ${new_acct - new_margin:,.2f}")
+    # ── Updated balance ──
+    try:
+        user2 = _post({"type": "clearinghouseState", "user": address, "dex": XYZ_DEX})
+        cross2 = user2.get("crossMarginSummary", {})
+        new_acct = float(cross2.get("accountValue", 0))
+        new_margin = float(cross2.get("totalMarginUsed", 0))
+        print(f"\n  --- Updated Account ---")
+        print(f"  NAV:           ${new_acct:,.2f}")
+        print(f"  Free Margin:   ${new_acct - new_margin:,.2f}")
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

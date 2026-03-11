@@ -37,6 +37,17 @@ VENUE_ORDER_SCRIPTS: dict[str, str] = {
 }
 
 
+async def _get_mark_price(pool: asyncpg.Pool, venue: str, symbol: str) -> float:
+    """Get latest mark price for a venue/symbol from funding_rates table."""
+    row = await pool.fetchrow(
+        "SELECT mark_price FROM funding_rates "
+        "WHERE venue = $1 AND symbol = $2 AND mark_price IS NOT NULL "
+        "ORDER BY timestamp DESC LIMIT 1",
+        venue, symbol,
+    )
+    return float(row["mark_price"]) if row and row["mark_price"] else 0.0
+
+
 def _run_order(venue: str, symbol: str, side: str, size: float,
                reduce_only: bool = False, dry_run: bool = False) -> tuple[bool, str]:
     """Run a venue market order script via subprocess.
@@ -350,19 +361,28 @@ async def _execute_entry(
         print(f"    [DRY RUN] Would open short@{tag.short_venue} + long@{tag.long_venue} ${size:.2f}")
         return True
 
-    # TODO: convert USD size to base asset size using mark price
-    # For now, this is a placeholder — real implementation needs price lookup
-    print(f"    Opening short@{tag.short_venue} + long@{tag.long_venue}")
+    # Convert USD size to base asset quantity using mark price
+    mark = await _get_mark_price(pool, tag.short_venue, symbol)
+    if mark <= 0:
+        mark = await _get_mark_price(pool, tag.long_venue, symbol)
+    if mark <= 0:
+        print(f"    No mark price found for {symbol} — skipping entry")
+        state.entry_fail_counts[symbol] = state.entry_fail_counts.get(symbol, 0) + 1
+        return False
+
+    base_size = round(size / mark, 6)
+    print(f"    Opening short@{tag.short_venue} + long@{tag.long_venue} "
+          f"(${size:.2f} / ${mark:,.2f} = {base_size} {symbol})")
 
     # Place short leg
-    short_ok, short_out = _run_order(tag.short_venue, symbol, "sell", size)
+    short_ok, short_out = _run_order(tag.short_venue, symbol, "sell", base_size)
     # Place long leg
-    long_ok, long_out = _run_order(tag.long_venue, symbol, "buy", size)
+    long_ok, long_out = _run_order(tag.long_venue, symbol, "buy", base_size)
 
     if short_ok and long_ok:
-        # Both filled — create position
+        # Both filled — create position (store base_size for exits)
         await _insert_position(pool, symbol, tag.short_venue, tag.long_venue,
-                               size, 0.0, 0.0)  # prices would come from fill data
+                               base_size, mark, mark)
         return True
 
     if short_ok != long_ok:
@@ -370,9 +390,9 @@ async def _execute_entry(
         print(f"    Partial fill — attempting recovery")
         # Try to close the filled leg
         if short_ok:
-            _run_order(tag.short_venue, symbol, "buy", size, reduce_only=True)
+            _run_order(tag.short_venue, symbol, "buy", base_size, reduce_only=True)
         else:
-            _run_order(tag.long_venue, symbol, "sell", size, reduce_only=True)
+            _run_order(tag.long_venue, symbol, "sell", base_size, reduce_only=True)
         state.entry_fail_counts[symbol] = state.entry_fail_counts.get(symbol, 0) + 1
         return False
 

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hedgehog Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <div>
+        <span class="brand">HEDGEHOG</span>
+        <span class="brand-sub">Portfolio Dashboard</span>
+      </div>
+      <div class="refresh-info" id="refresh-info">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="refresh-text">Loading...</span>
+      </div>
+    </div>
+    <div class="topbar-metrics" id="topbar-metrics">
+      <div class="metric"><span class="metric-label">Equity</span><span class="metric-value" id="m-equity">--</span></div>
+      <div class="metric"><span class="metric-label">Margin Used</span><span class="metric-value" id="m-margin-used">--</span></div>
+      <div class="metric"><span class="metric-label">Margin Free</span><span class="metric-value" id="m-margin-free">--</span></div>
+      <div class="metric"><span class="metric-label">Util %</span><span class="metric-value" id="m-util">--</span></div>
+      <div class="metric"><span class="metric-label">Positions</span><span class="metric-value" id="m-positions">--</span></div>
+      <div class="metric"><span class="metric-label">uPnL</span><span class="metric-value" id="m-upnl">--</span></div>
+    </div>
+  </div>
+
+  <div class="main-content">
+
+    <!-- Hedge Groups (Front and Center) -->
+    <div class="panel" id="hedge-panel">
+      <div class="panel-header">
+        <span>Hedge Groups</span>
+        <span class="count" id="hedge-count">0 groups</span>
+      </div>
+      <div id="hedge-body">
+        <div class="loading-msg"><span class="loading-spinner"></span> Loading positions...</div>
+      </div>
+    </div>
+
+    <!-- Exchange Balances -->
+    <div class="panel" id="balance-panel">
+      <div class="panel-header">
+        <span>Exchange Balances</span>
+        <span class="count" id="venue-count">0 venues</span>
+      </div>
+      <div class="balance-grid" id="balance-grid">
+        <div class="loading-msg"><span class="loading-spinner"></span> Loading balances...</div>
+      </div>
+    </div>
+
+    <!-- Tabbed Lower Panel -->
+    <div class="panel" id="lower-panel">
+      <div class="tab-bar">
+        <button class="tab-btn active" data-tab="opportunities">Opportunities</button>
+        <button class="tab-btn" data-tab="positions">All Positions</button>
+        <button class="tab-btn" data-tab="funding">Funding Rates</button>
+      </div>
+
+      <!-- Opportunities -->
+      <div class="tab-content active" id="tab-opportunities">
+        <div class="loading-msg" id="opp-loading"><span class="loading-spinner"></span> Scanning 10 venues...</div>
+      </div>
+
+      <!-- All Positions -->
+      <div class="tab-content" id="tab-positions">
+        <div id="positions-body"></div>
+      </div>
+
+      <!-- Funding Matrix -->
+      <div class="tab-content" id="tab-funding">
+        <div id="funding-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

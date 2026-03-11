@@ -1,1 +1,0 @@
-../../verification/venue_params.py
