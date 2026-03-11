@@ -44,7 +44,7 @@ venues:
     chain: lighter_zk
     chain_type: evm
     settlement_chain: ethereum
-    funding_cycle_hours: 1
+    funding_cycle_hours: 8
     maker_fee_bps: 0.0
     taker_fee_bps: 0.0
     max_leverage: 50
@@ -150,7 +150,7 @@ venues:
     chain: paradex_starknet
     chain_type: starknet
     settlement_chain: ethereum
-    funding_cycle_hours: 1
+    funding_cycle_hours: 8
     maker_fee_bps: 0.0
     taker_fee_bps: 2.0            # 0 for UI, 2 for API
     max_leverage: 50

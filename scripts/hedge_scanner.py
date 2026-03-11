@@ -143,7 +143,7 @@ async def fetch_aster_rates(client: httpx.AsyncClient) -> dict[str, float]:
 
 
 async def fetch_lighter_rates(client: httpx.AsyncClient) -> dict[str, float]:
-    """Lighter: 1h cycle. Bulk funding-rates endpoint."""
+    """Lighter: 8h cycle. Bulk funding-rates endpoint."""
     base = "https://mainnet.zklighter.elliot.ai"
 
     # Fetch all funding rates in one call
@@ -166,7 +166,7 @@ async def fetch_lighter_rates(client: httpx.AsyncClient) -> dict[str, float]:
         if sym in TARGET_SET:
             mid = d["market_id"]
             rate = rate_by_mid.get(mid, 0.0)
-            rates[sym] = rate * 24  # annualize from 1h to daily
+            rates[sym] = rate * 3  # 8h cycle: 3 payments/day
     return rates
 
 

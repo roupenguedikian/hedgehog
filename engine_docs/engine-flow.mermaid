@@ -1,0 +1,77 @@
+---
+title: "Hedgehog Engine — Full Flow"
+---
+flowchart TD
+    CRON["⏱ cron every 60s"] --> CA["collect_all.py --direct"]
+
+    CA -->|parallel| HL["hl_query.py"] & DR["drift_query.py"] & DY["dydx_query.py"] & AS["aster_query.py"] & LT["lighter_query.py"] & AP["apex_query.py"]
+
+    HL & DR & DY & AS & LT & AP -->|JSONL| INS["insert_records()"]
+    INS --> DB[("TimescaleDB\nfunding_rates\naccount_snapshots\nposition_snapshots")]
+
+    DB --> EMA["Compute 15m EMA\non predicted rates\n(Python, per venue/symbol)"]
+
+    EMA --> BEST["Per symbol:\nbsfr = best short rate\nblfr = best long rate\nbndpy, bbh"]
+
+    BEST --> EVAL{{"evaluate()\nper symbol"}}
+
+    EVAL --> Q1{"1. Has open\nposition?"}
+
+    Q1 -->|NO| Q6{"6. Worth entering?"}
+    Q1 -->|YES| Q2{"2. Both legs\nalive?"}
+
+    Q2 -->|YES| Q3{"3. cndpy < xndpy?\n(hedge deteriorating?)"}
+    Q2 -->|NO| RECOVER{"Recovery:\nretry same exchange\nthen try 2nd best\nthen EXIT"}
+
+    RECOVER -->|all retries fail| EXIT_TAG["tag EXIT"]
+    RECOVER -->|hedge completed| Q3
+
+    Q3 -->|"NO (hedge is fine)"| Q5{"5. Is there\nsomething better?"}
+    Q3 -->|"YES (hedge is bad)"| Q4{"4. Rotate or exit?"}
+
+    Q4 -->|"bndpy > endpy\nAND crbh < mrbh"| ROT_TAG["tag ROTATION"]
+    Q4 -->|"bndpy > endpy\nAND crbh >= mrbh"| EXIT_TAG2["tag EXIT\n(rotation too expensive)"]
+    Q4 -->|"bndpy < endpy"| EXIT_TAG3["tag EXIT\n(nothing to rotate to)"]
+
+    Q5 -->|"cndpy >= bndpy"| HOLD_TAG["tag HOLD\n(already best)"]
+    Q5 -->|"cndpy < bndpy"| WEAK{"Identify weak leg\ncompute single-leg\nrotation cost"}
+    WEAK -->|"rbh < mrbh"| ROTS_TAG["tag ROTATION_SINGLE\n(specify leg)"]
+    WEAK -->|"rbh >= mrbh"| HOLD_TAG2["tag HOLD\n(not worth it)"]
+
+    Q6 -->|"bndpy < endpy\nOR bbh > mebh"| NO_ENTRY["NO_ENTRY\n(reset counter)"]
+    Q6 -->|"bndpy >= endpy\nAND bbh <= mebh"| INC["increment counter"]
+    INC -->|"counter < threshold"| WAIT["wait"]
+    INC -->|"counter >= threshold"| ENTRY_TAG["tag ENTRY"]
+
+    EXIT_TAG & EXIT_TAG2 & EXIT_TAG3 --> EXEC_EXIT
+    ROT_TAG & ROTS_TAG --> EXEC_ROT
+    ENTRY_TAG --> EXEC_ENTRY
+
+    subgraph EXECUTE["Execution (after all symbols tagged)"]
+        direction TB
+        EXEC_EXIT["1. EXITS first\n(free up capital)"]
+        EXEC_ROT["2. ROTATIONS second\n(sort by NDPY improvement)"]
+        EXEC_ENTRY["3. ENTRIES last\n(sort by bndpy, 1 per cycle,\nskip after 3 fails)"]
+        EXEC_EXIT --> EXEC_ROT --> EXEC_ENTRY
+    end
+
+    EXECUTE --> ADAPTERS["Write-only adapters\nHyperliquid - Drift - dYdX\nAster - Lighter - ApeX"]
+
+    ADAPTERS -->|fills| DB
+
+    style CRON fill:#1a202c,stroke:#718096,color:#e2e8f0
+    style CA fill:#2d3748,stroke:#4a5568,color:#e2e8f0
+    style DB fill:#1a365d,stroke:#2b6cb0,color:#bee3f8
+    style EMA fill:#22543d,stroke:#38a169,color:#c6f6d5
+    style BEST fill:#22543d,stroke:#38a169,color:#c6f6d5
+    style EVAL fill:#553c9a,stroke:#805ad5,color:#e9d8fd
+    style EXECUTE fill:#742a2a,stroke:#e53e3e,color:#fed7d7
+    style EXIT_TAG fill:#742a2a,stroke:#e53e3e,color:#fed7d7
+    style EXIT_TAG2 fill:#742a2a,stroke:#e53e3e,color:#fed7d7
+    style EXIT_TAG3 fill:#742a2a,stroke:#e53e3e,color:#fed7d7
+    style ROT_TAG fill:#744210,stroke:#d69e2e,color:#fefcbf
+    style ROTS_TAG fill:#744210,stroke:#d69e2e,color:#fefcbf
+    style HOLD_TAG fill:#22543d,stroke:#38a169,color:#c6f6d5
+    style HOLD_TAG2 fill:#22543d,stroke:#38a169,color:#c6f6d5
+    style ENTRY_TAG fill:#22543d,stroke:#38a169,color:#c6f6d5
+    style NO_ENTRY fill:#1a202c,stroke:#718096,color:#a0aec0

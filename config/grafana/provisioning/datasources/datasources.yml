@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  - name: TimescaleDB
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: timescaledb:5432
+    database: aegis
+    user: aegis
+    uid: timescaledb
+    secureJsonData:
+      password: $DB_PASSWORD
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true

@@ -41,23 +41,26 @@ services:
       - hedgehog
 
 
-  web:
-    build: .
-    container_name: hedgehog-web
+  grafana:
+    image: grafana/grafana-oss:11.5.2
+    container_name: hedgehog-grafana
     restart: unless-stopped
-    env_file: .env
     environment:
-      DB_HOST: timescaledb
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/hedgehog-command.json
+      GF_USERS_DEFAULT_THEME: dark
+      GF_EXPLORE_ENABLED: "true"
+      DB_PASSWORD: ${DB_PASSWORD:-aegis_dev}
     ports:
-      - "8000:8000"
+      - "3000:3000"
     volumes:
-      - ./web:/app/web
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana_data:/var/lib/grafana
     depends_on:
       - timescaledb
     networks:
       - hedgehog
-    command: uvicorn web.app:app --host 0.0.0.0 --port 8000
 
 networks:
   hedgehog:
@@ -66,3 +69,4 @@ networks:
 volumes:
   redis_data:
   pg_data:
+  grafana_data:

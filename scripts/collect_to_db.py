@@ -615,11 +615,11 @@ class LighterCollector(VenueCollector):
                 oi = float(d.get("open_interest", 0))
 
                 rate = rate_map.get(mid, 0.0)
-                ann = rate * 8760  # 1h funding cycle
+                ann = rate * 1095  # 8h funding cycle: 8760/8
                 oi_usd = oi * last_price if last_price > 0 else oi
                 rows.append({
                     "symbol": symbol, "rate": rate, "annualized": ann,
-                    "cycle_hours": 1, "mark_price": last_price,
+                    "cycle_hours": 8, "mark_price": last_price,
                     "index_price": None, "open_interest": oi_usd,
                     "predicted_rate": None,
                 })

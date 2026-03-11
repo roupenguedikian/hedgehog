@@ -403,7 +403,7 @@ async def query_fills(client: httpx.AsyncClient, account_index: int):
 
 async def query_funding(client: httpx.AsyncClient, account_index: int):
     """Market-wide funding rates for all active perpetual markets (public).
-    Lighter has 1-hour funding cycles (8760 payments/year)."""
+    Lighter has 8-hour funding cycles (1095 payments/year)."""
     print("=" * 82)
     print(f"  LIGHTER — FUNDING RATES (top 20 by 24h volume)")
     print("=" * 82)
@@ -434,7 +434,7 @@ async def query_funding(client: httpx.AsyncClient, account_index: int):
         vol_24h = float(d.get("daily_quote_token_volume", 0))
 
         rate = rate_map.get(mid, 0.0)
-        ann = rate * 8760  # 1h funding cycle
+        ann = rate * 1095  # 8h funding cycle
         mark = last_price  # best available proxy
         oi_usd = oi * last_price if last_price > 0 else oi
 

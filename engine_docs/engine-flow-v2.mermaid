@@ -1,0 +1,86 @@
+---
+title: "Hedgehog Engine v2 — Full Flow"
+---
+flowchart TD
+    CRON["⏱ cron every 60s"] --> CA["collect_all.py --direct"]
+
+    CA -->|parallel| HL["hl_query.py"] & DR["drift_query.py"] & DY["dydx_query.py"] & AS["aster_query.py"] & LT["lighter_query.py"] & AP["apex_query.py"]
+
+    HL & DR & DY & AS & LT & AP -->|JSONL| INS["insert_records()"]
+    INS --> DB[("TimescaleDB\nfunding_rates\naccount_snapshots\nposition_snapshots")]
+
+    DB --> FRESH{"Freshness gate:\nexclude venues with\nno data in 5 min"}
+
+    FRESH --> EMA["Compute 15m EMA\non predicted rates"]
+
+    EMA --> OUTLIER{"Outlier gate:\nexclude rates\n> 3 sigma from EMA"}
+
+    OUTLIER --> BEST["Per symbol:\nbsfr + blfr\nbndpy + bbh"]
+
+    BEST --> NAV["Read live NAV from\nportfolio_summary"]
+
+    NAV --> EVAL{{"evaluate()\nper symbol"}}
+
+    EVAL --> Q1{"1. Has open\nposition?"}
+
+    Q1 -->|NO| Q6{"6. Worth entering?"}
+    Q1 -->|YES| Q2{"2. Status = ACTIVE?\n(both legs alive)"}
+
+    Q2 -->|ACTIVE| Q3{"3. cndpy < xndpy?"}
+    Q2 -->|DEGRADED| RECOVER{"Recovery:\nretry same exchange\nthen 2nd best\nthen EMERGENCY EXIT"}
+
+    RECOVER -->|"all fail\n(IMMEDIATE)"| EXIT_EMER["EMERGENCY EXIT\n(this cycle, no tags)"]
+    RECOVER -->|hedge completed| MARK_ACTIVE["mark ACTIVE"] --> Q3
+
+    Q3 -->|"NO (fine)"| Q5{"5. Something\nbetter?"}
+    Q3 -->|"YES (bad)"| Q4{"4. Rotate\nor exit?"}
+
+    Q4 -->|"bndpy > endpy\ncrbh < mrbh"| ROT_TAG["ROTATION\n(immediate)"]
+    Q4 -->|"bndpy > endpy\ncrbh >= mrbh"| EXIT_TAG2["EXIT\n(rotation too expensive)"]
+    Q4 -->|"bndpy < endpy"| EXIT_TAG3["EXIT\n(nothing to rotate to)"]
+
+    Q5 -->|"cndpy >= bndpy"| HOLD["HOLD\n(already best)"]
+    Q5 -->|"cndpy < bndpy\nin cooldown"| HOLD2["HOLD\n(rotation cooldown)"]
+    Q5 -->|"cndpy < bndpy\npast cooldown"| WEAK{"Weak leg:\npre-flight size check\ncompute rotation cost"}
+    WEAK -->|"rbh < mrbh\nsize OK"| ROTS_TAG["ROTATION_SINGLE\n(immediate)"]
+    WEAK -->|"rbh >= mrbh\nor size fail"| HOLD3["HOLD"]
+
+    Q6 -->|"bndpy < endpy\nor bbh > mebh"| NO_ENTRY["NO_ENTRY\n(reset counter)"]
+    Q6 -->|"bndpy >= endpy\nbbh <= mebh"| INC["increment counter"]
+    INC -->|"< threshold"| WAIT["wait"]
+    INC -->|">= threshold"| ENTRY_TAG["ENTRY\n(confirmed)"]
+
+    EXIT_EMER --> EXEC1
+    EXIT_TAG2 & EXIT_TAG3 --> EXEC2
+    ROT_TAG & ROTS_TAG --> EXEC3
+    ENTRY_TAG --> EXEC4
+
+    subgraph EXECUTE["Execution order"]
+        direction TB
+        EXEC1["1 EMERGENCY EXITS\n(DEGRADED positions)"]
+        EXEC2["2 EXITS\n(verify both legs closed\nbefore marking CLOSED)"]
+        EXEC3["3 ROTATIONS\n(single-leg: close 1, open 1)\n(sort by NDPY improvement)"]
+        EXEC4["4 ENTRIES\n(1 per cycle, sort by bndpy)\n(skip after 3 fails)"]
+        EXEC1 --> EXEC2 --> EXEC3 --> EXEC4
+    end
+
+    EXECUTE --> ADAPTERS["Write-only adapters"]
+    ADAPTERS -->|fills + status| DB
+
+    style CRON fill:#1a202c,stroke:#718096,color:#e2e8f0
+    style CA fill:#2d3748,stroke:#4a5568,color:#e2e8f0
+    style DB fill:#1a365d,stroke:#2b6cb0,color:#bee3f8
+    style FRESH fill:#553c9a,stroke:#805ad5,color:#e9d8fd
+    style EMA fill:#22543d,stroke:#38a169,color:#c6f6d5
+    style OUTLIER fill:#553c9a,stroke:#805ad5,color:#e9d8fd
+    style BEST fill:#22543d,stroke:#38a169,color:#c6f6d5
+    style NAV fill:#1a365d,stroke:#2b6cb0,color:#bee3f8
+    style EVAL fill:#553c9a,stroke:#805ad5,color:#e9d8fd
+    style EXECUTE fill:#742a2a,stroke:#e53e3e,color:#fed7d7
+    style EXIT_EMER fill:#9b2c2c,stroke:#e53e3e,color:#fff5f5
+    style EXIT_TAG2 fill:#742a2a,stroke:#e53e3e,color:#fed7d7
+    style EXIT_TAG3 fill:#742a2a,stroke:#e53e3e,color:#fed7d7
+    style ROT_TAG fill:#744210,stroke:#d69e2e,color:#fefcbf
+    style ROTS_TAG fill:#744210,stroke:#d69e2e,color:#fefcbf
+    style ENTRY_TAG fill:#22543d,stroke:#38a169,color:#c6f6d5
+    style NO_ENTRY fill:#1a202c,stroke:#718096,color:#a0aec0
