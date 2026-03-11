@@ -29,7 +29,7 @@ An optional dYdX address (starts with `dydx1`) can be passed to override the def
 ## How to run
 
 ```bash
-.venv/bin/python scripts/dydx_query.py $ARGUMENTS
+.venv/bin/python connectors/dydx_query.py $ARGUMENTS
 ```
 
 ## Presentation

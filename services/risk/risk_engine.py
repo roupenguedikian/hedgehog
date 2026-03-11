@@ -5,9 +5,7 @@ Risk evaluation for proposed trades against portfolio limits.
 from __future__ import annotations
 
 import structlog
-from models.core import (
-    RiskCheck, RiskDecision, TradeAction, PortfolioSnapshot, VenueConfig,
-)
+from models.core import RiskDecision
 
 logger = structlog.get_logger()
 

@@ -11,7 +11,7 @@ Run all 6 venue query skills in parallel to get a complete cross-venue snapshot.
 ## How to run
 
 ```bash
-.venv/bin/python scripts/hedgehog_query.py
+.venv/bin/python connectors/hedgehog_query.py
 ```
 
 This runs all 6 venue query scripts in parallel (hl, aster, lighter, apex, dydx, drift) and prints their output sequentially. An optional subcommand (e.g. `funding`, `positions`) is passed through to each venue script.

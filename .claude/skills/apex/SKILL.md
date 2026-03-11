@@ -28,7 +28,7 @@ Based on `$ARGUMENTS`, run the appropriate section(s). Default is `all`.
 ## How to run
 
 ```bash
-python3 scripts/apex_query.py $ARGUMENTS
+python3 connectors/apex_query.py $ARGUMENTS
 ```
 
 ## Presentation

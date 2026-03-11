@@ -13,7 +13,6 @@ from typing import Optional
 import structlog
 
 from adapters.base_adapter import BaseDefiAdapter
-from models.core import FundingRate, VenuePairOpportunity
 from services.data.coinglass_client import CoinglassClient, DefiLlamaClient
 
 logger = structlog.get_logger()
@@ -45,13 +44,13 @@ class FundingRateCollector:
         self.min_spread_annual = min_spread_annual
 
         # Latest state
-        self.latest_rates: dict[tuple[str, str], FundingRate] = {}  # (venue, symbol) -> rate
-        self.latest_opportunities: list[VenuePairOpportunity] = []
+        self.latest_rates: dict[tuple[str, str], dict] = {}  # (venue, symbol) -> rate dict
+        self.latest_opportunities: list[dict] = []
         self.venue_volumes: dict[str, dict] = {}  # venue -> {volume_24h, ...}
         self.last_update: Optional[datetime] = None
 
         # Historical buffer (last 24h in memory, rest in DB)
-        self.rate_history: list[FundingRate] = []
+        self.rate_history: list[dict] = []
         self._max_history = 10000
 
     async def collect_once(self) -> dict:
@@ -79,7 +78,7 @@ class FundingRateCollector:
                 continue
             if result is None:
                 continue
-            key = (result.venue, result.symbol)
+            key = (result["venue"], result["symbol"])
             self.latest_rates[key] = result
             self.rate_history.append(result)
             successful += 1
@@ -117,16 +116,28 @@ class FundingRateCollector:
 
     async def _collect_venue_rate(
         self, venue_name: str, adapter: BaseDefiAdapter, symbol: str
-    ) -> Optional[FundingRate]:
+    ) -> Optional[dict]:
         """Collect funding rate from a single venue + symbol.
         Pass raw symbol — each adapter normalizes internally in get_funding_rate.
+        Returns a plain dict with keys: venue, symbol, rate, cycle_hours, mark_price,
+        index_price, next_funding_ts, predicted_rate, timestamp.
         """
         try:
-            rate = await adapter.get_funding_rate(symbol)
-            # Normalize venue name and symbol to canonical form
-            rate.venue = venue_name
-            rate.symbol = symbol
-            return rate
+            rate_obj = await adapter.get_funding_rate(symbol)
+            # Build a plain dict, pulling attributes from whatever the adapter returns
+            rate_val = getattr(rate_obj, "rate", None) or rate_obj.get("rate", 0) if isinstance(rate_obj, dict) else rate_obj.rate
+            cycle_hours = getattr(rate_obj, "cycle_hours", 8) if not isinstance(rate_obj, dict) else rate_obj.get("cycle_hours", 8)
+            return {
+                "venue": venue_name,
+                "symbol": symbol,
+                "rate": rate_val,
+                "cycle_hours": cycle_hours,
+                "mark_price": getattr(rate_obj, "mark_price", None) if not isinstance(rate_obj, dict) else rate_obj.get("mark_price"),
+                "index_price": getattr(rate_obj, "index_price", None) if not isinstance(rate_obj, dict) else rate_obj.get("index_price"),
+                "next_funding_ts": getattr(rate_obj, "next_funding_ts", None) if not isinstance(rate_obj, dict) else rate_obj.get("next_funding_ts"),
+                "predicted_rate": getattr(rate_obj, "predicted_rate", None) if not isinstance(rate_obj, dict) else rate_obj.get("predicted_rate"),
+                "timestamp": datetime.now(timezone.utc),
+            }
         except Exception as e:
             # Many venues don't support all symbols — this is expected
             logger.debug("funding.venue_error", venue=venue_name, symbol=symbol, error=str(e))
@@ -142,17 +153,26 @@ class FundingRateCollector:
                     # Only add if we don't already have direct data
                     key = (exchange, symbol)
                     if key not in self.latest_rates:
-                        self.latest_rates[key] = FundingRate(
-                            venue=exchange,
-                            symbol=symbol,
-                            rate=item["rate"],
-                            cycle_hours=8,  # CoinGlass default assumption
-                            timestamp=datetime.now(timezone.utc),
-                        )
+                        self.latest_rates[key] = {
+                            "venue": exchange,
+                            "symbol": symbol,
+                            "rate": item["rate"],
+                            "cycle_hours": 8,  # CoinGlass default assumption
+                            "mark_price": None,
+                            "index_price": None,
+                            "next_funding_ts": None,
+                            "predicted_rate": None,
+                            "timestamp": datetime.now(timezone.utc),
+                        }
         except Exception as e:
             logger.warning("funding.coinglass_supplement_error", error=str(e))
 
-    def _find_opportunities(self) -> list[VenuePairOpportunity]:
+    @staticmethod
+    def _annualized(rate: dict) -> float:
+        """Compute annualized funding rate from a rate dict."""
+        return rate["rate"] * (8760 / rate.get("cycle_hours", 8))
+
+    def _find_opportunities(self) -> list[dict]:
         """
         Find perp-perp hedge opportunities.
         For each symbol, find the venue pair with the widest funding rate spread.
@@ -170,39 +190,44 @@ class FundingRateCollector:
                 continue
 
             # Sort by annualized rate descending
-            rates_for_symbol.sort(key=lambda x: x[1].annualized, reverse=True)
+            rates_for_symbol.sort(key=lambda x: self._annualized(x[1]), reverse=True)
 
             # Best opportunity: highest rate venue (short) vs lowest (long)
             best_short_venue, best_short_rate = rates_for_symbol[0]
             best_long_venue, best_long_rate = rates_for_symbol[-1]
 
-            spread = best_short_rate.annualized - best_long_rate.annualized
+            short_ann = self._annualized(best_short_rate)
+            long_ann = self._annualized(best_long_rate)
+            spread = short_ann - long_ann
 
             if spread >= self.min_spread_annual:
-                opp = VenuePairOpportunity(
-                    symbol=symbol,
-                    short_venue=best_short_venue,
-                    long_venue=best_long_venue,
-                    short_rate_annual=best_short_rate.annualized,
-                    long_rate_annual=best_long_rate.annualized,
-                )
+                opp = {
+                    "symbol": symbol,
+                    "short_venue": best_short_venue,
+                    "long_venue": best_long_venue,
+                    "short_rate_annual": short_ann,
+                    "long_rate_annual": long_ann,
+                    "spread_annual": spread,
+                }
                 opportunities.append(opp)
 
             # Also check second-best pairs (for diversification)
             if len(rates_for_symbol) >= 3:
                 second_short_venue, second_short_rate = rates_for_symbol[1]
-                second_spread = second_short_rate.annualized - best_long_rate.annualized
+                second_short_ann = self._annualized(second_short_rate)
+                second_spread = second_short_ann - long_ann
                 if second_spread >= self.min_spread_annual and second_short_venue != best_short_venue:
-                    opportunities.append(VenuePairOpportunity(
-                        symbol=symbol,
-                        short_venue=second_short_venue,
-                        long_venue=best_long_venue,
-                        short_rate_annual=second_short_rate.annualized,
-                        long_rate_annual=best_long_rate.annualized,
-                    ))
+                    opportunities.append({
+                        "symbol": symbol,
+                        "short_venue": second_short_venue,
+                        "long_venue": best_long_venue,
+                        "short_rate_annual": second_short_ann,
+                        "long_rate_annual": long_ann,
+                        "spread_annual": second_spread,
+                    })
 
         # Sort by spread descending
-        opportunities.sort(key=lambda o: o.spread_annual, reverse=True)
+        opportunities.sort(key=lambda o: o["spread_annual"], reverse=True)
         return opportunities
 
     def get_rate_matrix(self) -> dict[str, dict[str, float]]:
@@ -214,7 +239,8 @@ class FundingRateCollector:
         for (venue, symbol), rate in self.latest_rates.items():
             if symbol not in matrix:
                 matrix[symbol] = {}
-            matrix[symbol][venue] = round(rate.annualized * 100, 2)  # as percentage
+            annualized = self._annualized(rate)
+            matrix[symbol][venue] = round(annualized * 100, 2)  # as percentage
         return matrix
 
     def get_historical_stats(self, venue: str, symbol: str, hours: int = 24) -> dict:
@@ -227,13 +253,13 @@ class FundingRateCollector:
 
         relevant = [
             r for r in self.rate_history
-            if r.venue == venue and r.symbol == symbol and r.timestamp.timestamp() > cutoff
+            if r["venue"] == venue and r["symbol"] == symbol and r["timestamp"].timestamp() > cutoff
         ]
 
         if not relevant:
             return {"mean": 0, "std": 0, "min": 0, "max": 0, "count": 0, "flip_count": 0}
 
-        rates = [r.rate for r in relevant]
+        rates = [r["rate"] for r in relevant]
         import statistics
         mean = statistics.mean(rates)
         std = statistics.stdev(rates) if len(rates) > 1 else 0

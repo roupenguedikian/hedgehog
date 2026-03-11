@@ -15,10 +15,7 @@ import asyncio
 import time
 import structlog
 
-from models.core import (
-    TradeAction, ActionType, HedgePosition, Position,
-    OrderResult, OrderStatus, Side,
-)
+from models.core import ActionType, OrderStatus, Side
 from services.monitoring import metrics as m
 
 logger = structlog.get_logger()

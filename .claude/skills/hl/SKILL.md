@@ -20,7 +20,7 @@ Query a Hyperliquid address for positions, balance, open orders, recent fills, a
 Run this command from the project root, substituting `ADDRESS` with the resolved address:
 
 ```bash
-.venv/bin/python scripts/hl_query.py $ARGUMENTS
+.venv/bin/python connectors/hl_query.py $ARGUMENTS
 ```
 
 Subcommands: `balance`, `positions`, `orders`, `fills`, `funding`, `all` (default).

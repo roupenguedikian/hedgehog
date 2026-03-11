@@ -31,7 +31,7 @@ load_env(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from models.core import VenueConfig, ChainType, VenueTier, Side
+from models.core import Side
 from adapters.hyperliquid_adapter import HyperliquidAdapter
 
 
@@ -95,15 +95,15 @@ async def main():
         print("ERROR: HYPERLIQUID_PRIVATE_KEY or EVM_PRIVATE_KEY not found in .env")
         sys.exit(1)
 
-    config = VenueConfig(
-        name="Hyperliquid", chain="hyperliquid_l1", chain_type=ChainType.EVM,
-        settlement_chain="hyperliquid_l1", funding_cycle_hours=1,
-        maker_fee_bps=1.5, taker_fee_bps=4.5, max_leverage=50,
-        collateral_token="USDC", api_base_url="https://api.hyperliquid.xyz",
-        ws_url="wss://api.hyperliquid.xyz/ws", deposit_chain="arbitrum",
-        tier=VenueTier.TIER_1, zero_gas=True, symbol_format="{symbol}",
-        symbol_overrides={},
-    )
+    config = {
+        "name": "Hyperliquid", "chain": "hyperliquid_l1", "chain_type": "evm",
+        "settlement_chain": "hyperliquid_l1", "funding_cycle_hours": 1,
+        "maker_fee_bps": 1.5, "taker_fee_bps": 4.5, "max_leverage": 50,
+        "collateral_token": "USDC", "api_base_url": "https://api.hyperliquid.xyz",
+        "ws_url": "wss://api.hyperliquid.xyz/ws", "deposit_chain": "arbitrum",
+        "tier": "tier_1", "zero_gas": True, "symbol_format": "{symbol}",
+        "symbol_overrides": {},
+    }
 
     adapter = HyperliquidAdapter(config)
     connected = await adapter.connect(pk)

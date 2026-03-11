@@ -12,8 +12,6 @@ from typing import Optional
 import httpx
 import structlog
 
-from models.core import FundingRate
-
 logger = structlog.get_logger()
 
 COINGLASS_BASE = "https://open-api-v3.coinglass.com"

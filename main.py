@@ -49,34 +49,34 @@ def load_config(config_dir: str = "config") -> dict:
 
 
 def build_venue_configs(venues_yaml: dict) -> dict:
-    """Parse venue YAML into VenueConfig objects."""
-    from models.core import VenueConfig, ChainType, VenueTier
+    """Parse venue YAML into plain config dicts."""
+    from models.core import ChainType, VenueTier
 
     venue_configs = {}
     for name, cfg in venues_yaml.get("venues", {}).items():
         try:
-            venue_configs[name] = VenueConfig(
-                name=cfg["name"],
-                chain=cfg["chain"],
-                chain_type=ChainType(cfg["chain_type"]),
-                settlement_chain=cfg.get("settlement_chain", ""),
-                funding_cycle_hours=cfg.get("funding_cycle_hours", 8),
-                maker_fee_bps=cfg.get("maker_fee_bps", 0),
-                taker_fee_bps=cfg.get("taker_fee_bps", 0),
-                max_leverage=cfg.get("max_leverage", 20),
-                collateral_token=cfg.get("collateral_token", "USDC"),
-                has_api=cfg.get("has_api", True),
-                api_base_url=cfg.get("api_base_url", ""),
-                ws_url=cfg.get("ws_url", ""),
-                deposit_chain=cfg.get("deposit_chain", ""),
-                tier=VenueTier(cfg.get("tier", "tier_2")),
-                zero_gas=cfg.get("zero_gas", False),
-                has_escape_hatch=cfg.get("has_escape_hatch", False),
-                has_privacy=cfg.get("has_privacy", False),
-                has_anti_mev=cfg.get("has_anti_mev", False),
-                yield_bearing_collateral=cfg.get("yield_bearing_collateral", False),
-                symbol_format=cfg.get("symbol_format", "{symbol}"),
-            )
+            venue_configs[name] = {
+                "name": cfg["name"],
+                "chain": cfg["chain"],
+                "chain_type": ChainType(cfg["chain_type"]).value,
+                "settlement_chain": cfg.get("settlement_chain", ""),
+                "funding_cycle_hours": cfg.get("funding_cycle_hours", 8),
+                "maker_fee_bps": cfg.get("maker_fee_bps", 0),
+                "taker_fee_bps": cfg.get("taker_fee_bps", 0),
+                "max_leverage": cfg.get("max_leverage", 20),
+                "collateral_token": cfg.get("collateral_token", "USDC"),
+                "has_api": cfg.get("has_api", True),
+                "api_base_url": cfg.get("api_base_url", ""),
+                "ws_url": cfg.get("ws_url", ""),
+                "deposit_chain": cfg.get("deposit_chain", ""),
+                "tier": VenueTier(cfg.get("tier", "tier_2")).value,
+                "zero_gas": cfg.get("zero_gas", False),
+                "has_escape_hatch": cfg.get("has_escape_hatch", False),
+                "has_privacy": cfg.get("has_privacy", False),
+                "has_anti_mev": cfg.get("has_anti_mev", False),
+                "yield_bearing_collateral": cfg.get("yield_bearing_collateral", False),
+                "symbol_format": cfg.get("symbol_format", "{symbol}"),
+            }
         except Exception as e:
             logger.warning(f"Failed to parse venue config: {name}", error=str(e))
     return venue_configs
@@ -202,9 +202,9 @@ async def run_score_only(configs: dict):
     print("=" * 80)
     for i, opp in enumerate(collector.latest_opportunities[:10]):
         print(
-            f"  {i+1}. {opp.symbol:<6} SHORT {opp.short_venue:<15} ({opp.short_rate_annual*100:+.2f}% ann) "
-            f"LONG {opp.long_venue:<15} ({opp.long_rate_annual*100:+.2f}% ann) "
-            f"= {opp.spread_pct:.2f}% spread"
+            f"  {i+1}. {opp['symbol']:<6} SHORT {opp['short_venue']:<15} ({opp['short_rate_annual']*100:+.2f}% ann) "
+            f"LONG {opp['long_venue']:<15} ({opp['long_rate_annual']*100:+.2f}% ann) "
+            f"= {opp['spread_pct']:.2f}% spread"
         )
 
     # Print rate matrix
@@ -253,15 +253,15 @@ async def run_collect_only(configs: dict):
 
         # Funding rates (annualized, raw, predicted) + market data
         for (venue, symbol), rate in collector.latest_rates.items():
-            m.FUNDING_RATE.labels(venue=venue, symbol=symbol).set(rate.annualized)
-            m.FUNDING_RATE_RAW.labels(venue=venue, symbol=symbol).set(rate.rate)
-            if rate.predicted_rate is not None:
-                predicted_ann = rate.predicted_rate * (8760 / rate.cycle_hours)
+            m.FUNDING_RATE.labels(venue=venue, symbol=symbol).set(rate["annualized"])
+            m.FUNDING_RATE_RAW.labels(venue=venue, symbol=symbol).set(rate["rate"])
+            if rate["predicted_rate"] is not None:
+                predicted_ann = rate["predicted_rate"] * (8760 / rate["cycle_hours"])
                 m.FUNDING_RATE_PREDICTED.labels(venue=venue, symbol=symbol).set(predicted_ann)
-            if rate.mark_price:
-                m.MARK_PRICE.labels(venue=venue, symbol=symbol).set(rate.mark_price)
-            if rate.index_price:
-                m.INDEX_PRICE.labels(venue=venue, symbol=symbol).set(rate.index_price)
+            if rate["mark_price"]:
+                m.MARK_PRICE.labels(venue=venue, symbol=symbol).set(rate["mark_price"])
+            if rate["index_price"]:
+                m.INDEX_PRICE.labels(venue=venue, symbol=symbol).set(rate["index_price"])
 
         # 24h statistics
         for venue_name in connected:
@@ -271,7 +271,7 @@ async def run_collect_only(configs: dict):
                     cycle_h = venue_configs.get(
                         venue_name,
                         venue_configs.get(list(venue_configs.keys())[0]),
-                    ).funding_cycle_hours
+                    )["funding_cycle_hours"]
                     m.FUNDING_RATE_MEAN_24H.labels(venue=venue_name, symbol=symbol).set(
                         stats["mean"] * (8760 / cycle_h)
                     )
@@ -283,10 +283,10 @@ async def run_collect_only(configs: dict):
         m.OPPORTUNITIES_FOUND.set(len(opps))
         for opp in opps[:8]:
             m.BEST_SPREAD.labels(
-                symbol=opp.symbol,
-                short_venue=opp.short_venue,
-                long_venue=opp.long_venue,
-            ).set(opp.spread_annual)
+                symbol=opp["symbol"],
+                short_venue=opp["short_venue"],
+                long_venue=opp["long_venue"],
+            ).set(opp["spread_annual"])
 
     logger.info("Starting continuous collection (Ctrl+C to stop)...")
     interval_sec = 30
@@ -341,15 +341,29 @@ async def run_full_bot(configs: dict, mode: str):
 
     # Import orchestrator components
     # Using inline orchestrator to avoid circular imports
-    from models.core import PortfolioSnapshot, TradeAction, ActionType, RiskDecision
+    from models.core import ActionType, RiskDecision
     from services.monitoring import metrics as m
     import json as json_mod
+
+    def _drawdown_pct(portfolio: dict) -> float:
+        """Compute drawdown percentage from a portfolio dict."""
+        peak = portfolio.get("peak_nav", portfolio["total_nav"])
+        if peak <= 0:
+            return 0.0
+        return (peak - portfolio["total_nav"]) / peak
 
     class BotEngine:
         """Simplified orchestrator that ties everything together."""
 
         def __init__(self):
-            self.portfolio = PortfolioSnapshot(total_nav=100000)  # Paper trading default
+            self.portfolio = {
+                "total_nav": 100000,
+                "positions": [],
+                "in_transit": 0,
+                "total_funding_collected": 0,
+                "total_realized_pnl": 0,
+                "peak_nav": 100000,
+            }  # Paper trading default
             self.cycle_count = 0
             self.decision_log = []
 
@@ -369,20 +383,20 @@ async def run_full_bot(configs: dict, mode: str):
                 healthy += 1
             m.VENUES_HEALTHY.set(healthy)
             for vs in (scores or []):
-                venue_name = vs.venue
+                venue_name = vs["venue"]
                 if venue_name:
                     m.VENUE_SCORE.labels(venue=venue_name).set(
-                        vs.composite_score
+                        vs["composite_score"]
                     )
-                    # Score components from VenueScore model fields
+                    # Score components from VenueScore dict fields
                     component_map = {
-                        "avg_funding_rate": vs.avg_funding_rate_30d,
-                        "funding_consistency": vs.funding_rate_std_30d,
-                        "liquidity_depth": vs.liquidity_depth_1pct_usd,
-                        "trading_fees": vs.trading_fee_bps,
-                        "funding_cycle": vs.funding_cycle_hours,
-                        "contract_maturity": vs.contract_age_months,
-                        "uptime": vs.uptime_30d,
+                        "avg_funding_rate": vs["avg_funding_rate_30d"],
+                        "funding_consistency": vs["funding_rate_std_30d"],
+                        "liquidity_depth": vs["liquidity_depth_1pct_usd"],
+                        "trading_fees": vs["trading_fee_bps"],
+                        "funding_cycle": vs["funding_cycle_hours"],
+                        "contract_maturity": vs["contract_age_months"],
+                        "uptime": vs["uptime_30d"],
                     }
                     for comp, val in component_map.items():
                         if val:
@@ -392,17 +406,17 @@ async def run_full_bot(configs: dict, mode: str):
 
             # Update funding rate metrics (raw + annualized + predicted)
             for (venue, symbol), rate in collector.latest_rates.items():
-                ann = rate.annualized
+                ann = rate["annualized"]
                 m.FUNDING_RATE.labels(venue=venue, symbol=symbol).set(ann)
-                m.FUNDING_RATE_RAW.labels(venue=venue, symbol=symbol).set(rate.rate)
-                if rate.predicted_rate is not None:
-                    predicted_ann = rate.predicted_rate * (8760 / rate.cycle_hours)
+                m.FUNDING_RATE_RAW.labels(venue=venue, symbol=symbol).set(rate["rate"])
+                if rate["predicted_rate"] is not None:
+                    predicted_ann = rate["predicted_rate"] * (8760 / rate["cycle_hours"])
                     m.FUNDING_RATE_PREDICTED.labels(venue=venue, symbol=symbol).set(predicted_ann)
                 # Market data from funding rate objects
-                if rate.mark_price:
-                    m.MARK_PRICE.labels(venue=venue, symbol=symbol).set(rate.mark_price)
-                if rate.index_price:
-                    m.INDEX_PRICE.labels(venue=venue, symbol=symbol).set(rate.index_price)
+                if rate["mark_price"]:
+                    m.MARK_PRICE.labels(venue=venue, symbol=symbol).set(rate["mark_price"])
+                if rate["index_price"]:
+                    m.INDEX_PRICE.labels(venue=venue, symbol=symbol).set(rate["index_price"])
 
             # Funding rate 24h statistics
             for venue_name in connected:
@@ -410,7 +424,7 @@ async def run_full_bot(configs: dict, mode: str):
                     stats = collector.get_historical_stats(venue_name, symbol, hours=24)
                     if stats["count"] > 0:
                         m.FUNDING_RATE_MEAN_24H.labels(venue=venue_name, symbol=symbol).set(
-                            stats["mean"] * (8760 / venue_configs.get(venue_name, venue_configs.get(list(venue_configs.keys())[0])).funding_cycle_hours)
+                            stats["mean"] * (8760 / venue_configs.get(venue_name, venue_configs.get(list(venue_configs.keys())[0]))["funding_cycle_hours"])
                         )
                         m.FUNDING_RATE_STD_24H.labels(venue=venue_name, symbol=symbol).set(stats["std"])
                         m.FUNDING_RATE_FLIPS_24H.labels(venue=venue_name, symbol=symbol).set(stats["flip_count"])
@@ -449,7 +463,7 @@ async def run_full_bot(configs: dict, mode: str):
                         m.ORDERBOOK_ASK_DEPTH_USD.labels(venue=venue_name, symbol=symbol).set(depth["ask_depth"])
                         if ob.asks:
                             oi_rate = collector.latest_rates.get((venue_name, symbol))
-                            if oi_rate and hasattr(oi_rate, 'mark_price') and oi_rate.mark_price:
+                            if oi_rate and oi_rate.get('mark_price'):
                                 pass  # OI set above from funding rate
                     except Exception:
                         pass
@@ -604,13 +618,7 @@ def main():
     parser.add_argument("--score-only", action="store_true", help="Score venues and exit")
     parser.add_argument("--collect-only", action="store_true", help="Collect rates continuously")
     parser.add_argument("--config-dir", default="config", help="Config directory path")
-    parser.add_argument("--metrics-port", type=int, default=8000, help="Prometheus metrics port")
     args = parser.parse_args()
-
-    # Start Prometheus metrics server
-    from services.monitoring.metrics import start_metrics_server
-    start_metrics_server(args.metrics_port)
-    logger.info("metrics.started", port=args.metrics_port)
 
     configs = load_config(args.config_dir)
     configs["strategy"]["mode"] = args.mode

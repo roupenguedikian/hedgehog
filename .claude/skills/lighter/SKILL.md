@@ -27,7 +27,7 @@ An optional account index (integer) can be passed to override the default from .
 ## How to run
 
 ```
-python3 scripts/lighter_query.py $ARGUMENTS
+python3 connectors/lighter_query.py $ARGUMENTS
 ```
 
 ## Presentation

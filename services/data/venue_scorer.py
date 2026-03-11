@@ -18,7 +18,6 @@ from typing import Optional
 
 import structlog
 
-from models.core import VenueScore, VenueConfig
 
 logger = structlog.get_logger()
 
@@ -38,16 +37,16 @@ class VenueScorer:
         self,
         collector,
         adapters: dict,
-        venue_configs: dict[str, VenueConfig],
+        venue_configs: dict[str, dict],
         weights: Optional[dict] = None,
     ):
         self.collector = collector
         self.adapters = adapters
         self.venue_configs = venue_configs
         self.weights = weights or DEFAULT_WEIGHTS
-        self._scores: dict[tuple[str, str], VenueScore] = {}
+        self._scores: dict[tuple[str, str], dict] = {}
 
-    async def score_all(self) -> list[VenueScore]:
+    async def score_all(self) -> list[dict]:
         scores = []
         for symbol in self.collector.symbols:
             for venue_name, adapter in self.adapters.items():
@@ -60,10 +59,10 @@ class VenueScorer:
                         self._scores[(venue_name, symbol)] = score
                 except Exception as e:
                     logger.debug("scorer.failed", venue=venue_name, symbol=symbol, error=str(e))
-        scores.sort(key=lambda s: s.composite_score, reverse=True)
+        scores.sort(key=lambda s: s["composite_score"], reverse=True)
         return scores
 
-    async def _score_venue(self, venue_name: str, adapter, symbol: str) -> Optional[VenueScore]:
+    async def _score_venue(self, venue_name: str, adapter, symbol: str) -> Optional[dict]:
         config = self.venue_configs.get(venue_name)
         if not config:
             return None
@@ -74,7 +73,8 @@ class VenueScorer:
         if not current_rate:
             return None
 
-        avg_rate_annual = current_rate.annualized
+        # Compute annualized inline: rate * (8760 / cycle_hours)
+        avg_rate_annual = current_rate["rate"] * (8760 / current_rate.get("cycle_hours", 8))
 
         # Historical stats for consistency
         stats = self.collector.get_historical_stats(venue_name, symbol, hours=24)
@@ -94,8 +94,8 @@ class VenueScorer:
         rate_score = min(1.0, abs(avg_rate_annual) / 0.50)
         consistency_score = max(0.0, 1.0 - rate_std * 100)
         depth_score = min(1.0, depth / 5_000_000)
-        fee_score = max(0.0, 1.0 - config.taker_fee_bps / 10.0)
-        cycle_score = 1.0 / config.funding_cycle_hours
+        fee_score = max(0.0, 1.0 - config["taker_fee_bps"] / 10.0)
+        cycle_score = 1.0 / config["funding_cycle_hours"]
         maturity_score = 0.5  # no on-chain maturity data yet
         uptime_score = 0.9    # no liveness tracking yet
 
@@ -112,42 +112,42 @@ class VenueScorer:
 
         volume = self.collector.venue_volumes.get(venue_name.lower(), {})
 
-        return VenueScore(
-            venue=venue_name,
-            symbol=symbol,
-            avg_funding_rate_30d=avg_rate_annual,
-            funding_rate_std_30d=rate_std,
-            liquidity_depth_1pct_usd=depth,
-            trading_fee_bps=config.taker_fee_bps + config.maker_fee_bps,
-            funding_cycle_hours=config.funding_cycle_hours,
-            composite_score=composite,
-            daily_volume_usd=volume.get("volume_24h", 0),
-        )
+        return {
+            "venue": venue_name,
+            "symbol": symbol,
+            "avg_funding_rate_30d": avg_rate_annual,
+            "funding_rate_std_30d": rate_std,
+            "liquidity_depth_1pct_usd": depth,
+            "trading_fee_bps": config["taker_fee_bps"] + config["maker_fee_bps"],
+            "funding_cycle_hours": config["funding_cycle_hours"],
+            "composite_score": composite,
+            "daily_volume_usd": volume.get("volume_24h", 0),
+        }
 
     # ── Query methods ────────────────────────────────────────────────────
 
-    def get_top_venues(self, symbol: str, n: int = 5) -> list[VenueScore]:
+    def get_top_venues(self, symbol: str, n: int = 5) -> list[dict]:
         venues = [s for (v, sy), s in self._scores.items() if sy == symbol]
-        venues.sort(key=lambda s: s.composite_score, reverse=True)
+        venues.sort(key=lambda s: s["composite_score"], reverse=True)
         return venues[:n]
 
     def get_best_pair(self, symbol: str) -> Optional[dict]:
         venues = self.get_top_venues(symbol, n=20)
         if len(venues) < 2:
             return None
-        by_rate = sorted(venues, key=lambda s: s.avg_funding_rate_30d, reverse=True)
+        by_rate = sorted(venues, key=lambda s: s["avg_funding_rate_30d"], reverse=True)
         best_short = by_rate[0]
         best_long = by_rate[-1]
-        spread = best_short.avg_funding_rate_30d - best_long.avg_funding_rate_30d
+        spread = best_short["avg_funding_rate_30d"] - best_long["avg_funding_rate_30d"]
         if spread <= 0:
             return None
         return {
-            "short_venue": best_short.venue,
-            "long_venue": best_long.venue,
-            "short_rate_annual": best_short.avg_funding_rate_30d,
-            "long_rate_annual": best_long.avg_funding_rate_30d,
-            "short_score": best_short.composite_score,
-            "long_score": best_long.composite_score,
+            "short_venue": best_short["venue"],
+            "long_venue": best_long["venue"],
+            "short_rate_annual": best_short["avg_funding_rate_30d"],
+            "long_rate_annual": best_long["avg_funding_rate_30d"],
+            "short_score": best_short["composite_score"],
+            "long_score": best_long["composite_score"],
             "spread_pct": spread * 100,
         }
 
@@ -155,23 +155,23 @@ class VenueScorer:
         venues = [s for (v, sy), s in self._scores.items() if sy == symbol]
         if len(venues) < 2:
             return []
-        by_rate = sorted(venues, key=lambda s: s.avg_funding_rate_30d, reverse=True)
+        by_rate = sorted(venues, key=lambda s: s["avg_funding_rate_30d"], reverse=True)
         pairs = []
         for short_vs in by_rate:
             for long_vs in reversed(by_rate):
-                if short_vs.venue == long_vs.venue:
+                if short_vs["venue"] == long_vs["venue"]:
                     continue
-                spread = short_vs.avg_funding_rate_30d - long_vs.avg_funding_rate_30d
+                spread = short_vs["avg_funding_rate_30d"] - long_vs["avg_funding_rate_30d"]
                 if spread <= 0:
                     continue
-                cq = math.sqrt(short_vs.composite_score * long_vs.composite_score)
+                cq = math.sqrt(short_vs["composite_score"] * long_vs["composite_score"])
                 pairs.append({
                     "symbol": symbol,
-                    "short_venue": short_vs.venue,
-                    "long_venue": long_vs.venue,
+                    "short_venue": short_vs["venue"],
+                    "long_venue": long_vs["venue"],
                     "spread_annual": spread,
-                    "short_score": short_vs.composite_score,
-                    "long_score": long_vs.composite_score,
+                    "short_score": short_vs["composite_score"],
+                    "long_score": long_vs["composite_score"],
                     "combined_quality": cq,
                     "pair_rank": spread * cq,
                 })
@@ -190,8 +190,8 @@ class VenueScorer:
               f"{'Fees':>8} {'Depth':>12} {'Cycle':>6}")
         print(f"  {'-' * 65}")
         for i, s in enumerate(top):
-            print(f"  {i+1:<4} {s.venue:<15} {s.composite_score:>6.4f} "
-                  f"{s.avg_funding_rate_30d*100:>+11.2f}% "
-                  f"{s.trading_fee_bps:>7.1f}bp "
-                  f"${s.liquidity_depth_1pct_usd:>10,.0f} "
-                  f"{s.funding_cycle_hours:>4}h")
+            print(f"  {i+1:<4} {s['venue']:<15} {s['composite_score']:>6.4f} "
+                  f"{s['avg_funding_rate_30d']*100:>+11.2f}% "
+                  f"{s['trading_fee_bps']:>7.1f}bp "
+                  f"${s['liquidity_depth_1pct_usd']:>10,.0f} "
+                  f"{s['funding_cycle_hours']:>4}h")

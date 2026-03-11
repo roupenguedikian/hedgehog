@@ -29,7 +29,7 @@ An optional Solana address (base58, ~44 chars) can be passed to override the def
 ## How to run
 
 ```bash
-.venv/bin/python scripts/drift_query.py $ARGUMENTS
+.venv/bin/python connectors/drift_query.py $ARGUMENTS
 ```
 
 ## Presentation

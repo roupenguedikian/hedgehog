@@ -26,7 +26,7 @@ Based on `$ARGUMENTS`, run the appropriate section(s). Default is `all`.
 ## How to run
 
 ```bash
-.venv/bin/python scripts/aster_query.py $ARGUMENTS
+.venv/bin/python connectors/aster_query.py $ARGUMENTS
 ```
 
 ## Presentation
